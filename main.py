@@ -45,11 +45,11 @@ async def chat_endpoint(
         with open(temp_audio_path, "wb") as buffer:
             shutil.copyfileobj(audio.file, buffer)
             
-        # 1. Transcribe
+        # 1. Transcribe with remote Whisper API
         # Force transcription in the TARGET language (the one being learned/practiced)
         # This prevents misdetection when user speaks target language with accent
         # Example: User selects "Apprendre Français" -> target_lang='fr' -> transcribe in French
-        transcription = stt_service.transcribe(temp_audio_path, language=target_lang)
+        transcription = await stt_service.transcribe(temp_audio_path, language=target_lang)
         logger.info(f"Transcription (lang={target_lang}): {transcription}")
         
         if not transcription:
@@ -64,45 +64,27 @@ async def chat_endpoint(
         #   - User speaks Russian (badly). Source=RU.
         #   - AI corrects in French? Or corrects in Russian?
         #   - AI responds in Russian.
-        # 1. Transcribe
-        # Force transcription in the TARGET language (the one being learned/practiced)
-        # This prevents the model from hallucinating the native language when the user speaks the target language with an accent.
-        transcription = stt_service.transcribe(temp_audio_path, language=target_lang)
-        logger.info(f"Transcription: {transcription}")
-        
-        if not transcription:
-            return JSONResponse({"error": "No speech detected"}, status_code=400)
-
-        # 2. LLM Correction & Response
+        # 2. LLM Correction & Response (avec détection de langue et segments)
         result = await llm_service.correct_and_respond(transcription, source_lang, target_lang)
+        detected_lang = result.get("detected_input_lang", target_lang)
         correction = result.get("correction", "")
-        explanation = result.get("explanation", "")
-        ai_response_text = result.get("response", "")
+        segments = result.get("segments", [])
         
+        logger.info(f"Detected input language: {detected_lang}")
         logger.info(f"Correction: {correction}")
-        logger.info(f"Explanation: {explanation}")
-        logger.info(f"Response: {ai_response_text}")
+        logger.info(f"Segments: {segments}")
 
-        # 3. TTS
-        audio_filename = f"{session_id}_response.mp3"
-        audio_output_path = f"audio_cache/{audio_filename}"
-        
-        # We want to speak the Target Language parts: Correction + Response
-        tts_text = ""
-        if correction and correction.lower() != transcription.lower():
-             tts_text += correction + ". "
-        tts_text += ai_response_text
-        
-        if tts_text:
-            # Use target_lang voice (e.g., French voice for French response)
-            await tts_service.generate_audio(tts_text, target_lang, audio_output_path)
+        # 3. TTS - Génération audio segmentée (sans répétition de l'input utilisateur)
+        audio_segments = []
+        if segments:
+            audio_segments = await tts_service.generate_segmented_audio(segments, session_id)
         
         return {
             "user_text": transcription,
+            "detected_input_lang": detected_lang,
             "correction": correction,
-            "explanation": explanation,
-            "ai_response": ai_response_text,
-            "audio_url": f"/audio/{audio_filename}" if tts_text else None
+            "segments": segments,
+            "audio_segments": audio_segments
         }
 
     except Exception as e:

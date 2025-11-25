@@ -80,17 +80,23 @@ async function sendAudio() {
         // Display User Text
         addMessage(data.user_text, "user");
 
-        // Display AI Response & Correction
-        let aiContent = data.ai_response;
-        if (data.correction && data.correction.toLowerCase() !== "aucune correction nécessaire") {
-            aiContent += `<span class="correction">${data.correction}</span>`;
+        // Display Correction if exists
+        if (data.correction) {
+            addMessage(`✓ Correction: ${data.correction}`, "correction");
         }
-        addMessage(aiContent, "ai", false, true); // true for HTML content
 
-        // Play Audio
-        if (data.audio_url) {
-            const audio = new Audio(data.audio_url);
-            audio.play();
+        // Display AI Segments with language indicators
+        if (data.segments && data.segments.length > 0) {
+            data.segments.forEach(segment => {
+                const langFlag = segment.lang === 'fr' ? '🇫🇷' : '🇷🇺';
+                const langName = segment.lang === 'fr' ? 'Français' : 'Русский';
+                addMessage(`${langFlag} <strong>${langName}:</strong> ${segment.text}`, "ai", false, true);
+            });
+        }
+
+        // Play Audio Segments Sequentially
+        if (data.audio_segments && data.audio_segments.length > 0) {
+            await playAudioSequentially(data.audio_segments);
         }
 
         statusText.textContent = "Prêt";
@@ -102,6 +108,17 @@ async function sendAudio() {
         
         const placeholder = document.querySelector('.message.user.placeholder');
         if (placeholder) placeholder.remove();
+    }
+}
+
+async function playAudioSequentially(audioSegments) {
+    for (const segment of audioSegments) {
+        await new Promise((resolve, reject) => {
+            const audio = new Audio(segment.audio_url);
+            audio.onended = resolve;
+            audio.onerror = reject;
+            audio.play().catch(reject);
+        });
     }
 }
 

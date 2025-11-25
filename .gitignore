@@ -1,7 +1,2 @@
-audio_cache/5ec11489-cd79-4d6a-a8aa-4b83911dda38_response.mp3
-audio_cache/8e26fab3-a12d-4b97-863d-58983284e587_response.mp3
-audio_cache/9e1868e4-f7f6-44c8-8489-8615fee75281_response.mp3
-audio_cache/69de4c04-d62b-463e-b4dd-2e222978dca6_response.mp3
-audio_cache/9073969e-7f63-426d-b52e-09a766e0ee26_response.mp3
-audio_cache/a329228e-3bb9-401a-bd41-a15ef01484f2_response.mp3
-audio_cache/dce1665b-3b10-4009-b13a-575a0e648887_response.mp3
+audio_cache/*
+__pycache__/*
