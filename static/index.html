@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Chatbot (FR/RU)</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Voice Chatbot</h1>
+            <div class="language-selector">
+                <label>
+                    <input type="radio" name="lang" value="fr" checked>
+                    <span>🇫🇷 Je parle Français (Apprendre Russe)</span>
+                </label>
+                <label>
+                    <input type="radio" name="lang" value="ru">
+                    <span>🇷🇺 Я говорю по-русски (Apprendre Français)</span>
+                </label>
+            </div>
+        </header>
+
+        <main id="chat-history">
+            <div class="message system">
+                <p>Bienvenue ! Appuyez sur le micro pour parler.</p>
+            </div>
+        </main>
+
+        <footer>
+            <button id="record-btn" class="record-btn">
+                <span class="icon">🎙️</span>
+            </button>
+            <p id="status-text">Prêt</p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

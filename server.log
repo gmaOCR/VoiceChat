@@ -1,0 +1,10 @@
+INFO:     Started server process [142976]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on https://0.0.0.0:8000 (Press CTRL+C to quit)
+Loading Whisper model...
+Whisper model loaded.
+INFO:     192.168.1.71:38790 - "GET / HTTP/1.1" 200 OK
+INFO:     192.168.1.71:38790 - "GET /style.css HTTP/1.1" 404 Not Found
+INFO:     192.168.1.71:38790 - "GET /app.js HTTP/1.1" 404 Not Found
+INFO:     192.168.1.71:38790 - "GET /favicon.ico HTTP/1.1" 404 Not Found
