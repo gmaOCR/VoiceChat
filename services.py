@@ -45,49 +45,77 @@ class LLMService:
     async def correct_and_respond(self, user_text: str, source_lang: str, target_lang: str) -> dict:
         """
         Analyzes the user text for errors and generates a response.
-        Returns a dict with 'correction' and 'response'.
+        Returns a dict with 'correction', 'explanation', and 'response'.
         """
         
-        # Prompt engineering
-        if source_lang == "fr":
-            system_prompt = (
-                "Tu es un assistant linguistique utile. "
-                "L'utilisateur apprend le Russe. Il va te parler en Russe (ou essayer). "
-                "1. Corrige son texte s'il y a des erreurs grammaticales ou de formulation. Si c'est parfait, dis 'Aucune correction nécessaire'. "
-                "2. Réponds ensuite à sa phrase de manière naturelle en Russe pour continuer la conversation. "
-                "Réponds au format JSON: {\"correction\": \"...\", \"response\": \"...\"}"
-            )
-            user_msg = f"Voici ma phrase en Russe: {user_text}"
-        else: # source_lang == "ru" (User learns French)
-            system_prompt = (
-                "Tu es un assistant linguistique utile. "
-                "L'utilisateur apprend le Français. Il va te parler en Français (ou essayer). "
-                "1. Corrige son texte s'il y a des erreurs grammaticales ou de formulation. Si c'est parfait, dis 'Aucune correction nécessaire'. "
-                "2. Réponds ensuite à sa phrase de manière naturelle en Français pour continuer la conversation. "
-                "Réponds au format JSON: {\"correction\": \"...\", \"response\": \"...\"}"
-            )
-            user_msg = f"Voici ma phrase en Français: {user_text}"
+        # Determine languages
+        # source_lang: Language user SPOKE (e.g., 'ru' if practicing Russian)
+        # target_lang: Language user WANTS TO LEARN (e.g., 'ru')
+        # native_lang: The OTHER language (e.g., 'fr')
+        
+        if target_lang == "ru":
+            native_lang = "fr"
+            learning_lang = "ru"
+            native_lang_name = "Français"
+            learning_lang_name = "Russe"
+        else:
+            native_lang = "ru"
+            learning_lang = "fr"
+            native_lang_name = "Russe"
+            learning_lang_name = "Français"
+
+        # Construct System Prompt
+        system_prompt = (
+            f"Tu es un tuteur de langue expert. L'utilisateur apprend le {learning_lang_name} et parle {native_lang_name}. "
+            f"Il vient de dire une phrase en {learning_lang_name} (ou a essayé). "
+            "Ton objectif est de l'aider à s'améliorer tout en maintenant une conversation naturelle.\n\n"
+            "Analyse sa phrase et fournis une réponse au format JSON strict (sans markdown, sans texte avant/après) avec les champs suivants :\n"
+            "1. \"correction\": La phrase corrigée en {learning_lang_name}. Si elle était déjà parfaite, recopie-la simplement.\n"
+            "2. \"explanation\": Une brève explication des erreurs ou un conseil utile en {native_lang_name} (sa langue maternelle). Si c'était parfait, félicite-le brièvement en {native_lang_name}.\n"
+            "3. \"response\": Une réponse naturelle et engageante pour continuer la conversation, rédigée en {learning_lang_name}.\n\n"
+            "Format JSON attendu:\n"
+            "{\n"
+            "  \"correction\": \"...\",\n"
+            "  \"explanation\": \"...\",\n"
+            "  \"response\": \"...\"\n"
+            "}"
+        )
+        
+        user_msg = f"Voici ma phrase (en {learning_lang_name}): {user_text}"
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}
         ]
         
-        # We need to force JSON output if possible, or parse it. 
-        # Llama3 is usually good at following format instructions.
         content = await self.chat(messages)
         
         try:
+            # Clean content (remove markdown code blocks if present)
+            content = content.replace("```json", "").replace("```", "").strip()
+            
             # Try to find JSON in the response
             start = content.find('{')
             end = content.rfind('}') + 1
             if start != -1 and end != -1:
                 json_str = content[start:end]
+                # Fix potential bad escapes (basic)
+                # json_str = json_str.replace("\\'", "'") # Sometimes LLMs escape single quotes
                 return json.loads(json_str)
             else:
-                return {"correction": content, "response": ""}
-        except:
-            return {"correction": content, "response": ""}
+                # Fallback if JSON parsing fails
+                return {
+                    "correction": user_text, 
+                    "explanation": "Désolé, je n'ai pas pu analyser la réponse correctement (Format invalide).", 
+                    "response": content
+                }
+        except Exception as e:
+            print(f"JSON Parse Error: {e} | Content: {content}")
+            return {
+                "correction": user_text, 
+                "explanation": "Erreur de traitement de la réponse IA.", 
+                "response": content
+            }
 
 class TTSService:
     async def generate_audio(self, text: str, language: str, output_file: str):
