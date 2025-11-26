@@ -4,6 +4,7 @@ import json
 import asyncio
 import edge_tts
 import re
+import difflib
 
 # Configuration
 OLLAMA_URL = "http://192.168.1.28:11434"
@@ -132,9 +133,66 @@ class LLMService:
                 print(f"❌ Erreur Ollama: {e}")
                 return ""
 
-    async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str) -> dict:
+    async def evaluate_teacher_quality(self, history: list) -> dict:
+        """
+        Évalue la qualité de l'enseignement basé sur l'historique.
+        Retourne un rapport JSON.
+        """
+        if not history:
+            return {"score": 0, "feedback": "Pas d'historique"}
+            
+        prompt = """Tu es un expert en pédagogie des langues. Analyse cette conversation entre un étudiant et un professeur IA.
+        
+        CRITÈRES D'ÉVALUATION:
+        1. Séparation des langues (0-10): Est-ce que les langues sont bien séparées ?
+        2. Pédagogie (0-10): Est-ce que la progression est logique ? Les traductions sont-elles données ?
+        3. Correction (0-10): Est-ce que le prof corrige les erreurs de l'étudiant ?
+        
+        HISTORIQUE:
+        """
+        
+        for msg in history:
+            prompt += f"\n{msg['role']}: {msg['content']}"
+            
+        prompt += """
+        
+        Réponds UNIQUEMENT en JSON:
+        {
+            "scores": {"separation": X, "pedagogy": Y, "correction": Z},
+            "global_score": N (moyenne),
+            "strengths": ["..."],
+            "weaknesses": ["..."],
+            "verdict": "..."
+        }
+        """
+        
+        messages = [{"role": "user", "content": prompt}]
+        response = await self.chat(messages)
+        
+        try:
+            # Nettoyer et parser
+            content = response.replace("```json", "").replace("```", "").strip()
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            return json.loads(content[start:end])
+        except Exception as e:
+            print(f"❌ Erreur évaluation qualité: {e}")
+            return {"error": str(e)}
+
+    def calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calcule la similarité entre deux textes (0.0 à 1.0)"""
+        return difflib.SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
+
+    async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history: list = None, expected_text: str = None) -> dict:
         """
         Génère une réponse pédagogique bilingue FR/RU avec séparation stricte des langues.
+        
+        Args:
+            user_text: Texte de l'utilisateur
+            native_lang: Langue maternelle (non utilisé, détection auto)
+            learning_lang: Langue à apprendre (non utilisé, détection auto)
+            history: Historique de conversation [{"role": "user/assistant", "content": "..."}]
+            expected_text: Texte attendu pour l'exercice (validation stricte)
         """
         
         # Détecter si l'utilisateur parle français ou russe
@@ -154,7 +212,34 @@ class LLMService:
         teaching_lang_name = lang_names[teaching_lang]["name"]
         teaching_script = lang_names[teaching_lang]["script"]
         
+        # Validation stricte de l'exercice
+        validation_prompt = ""
+        if expected_text:
+            similarity = self.calculate_similarity(user_text, expected_text)
+            print(f"🔍 Validation stricte: '{user_text}' vs '{expected_text}' (Sim: {similarity:.2f})")
+            
+            if similarity < 0.5:
+                validation_prompt = f"""
+                ⚠️ ALERTE VALIDATION:
+                L'utilisateur devait dire: "{expected_text}"
+                Mais il a dit: "{user_text}"
+                
+                CE N'EST PAS L'EXERCICE DEMANDÉ.
+                1. NE LE FÉLICITE PAS pour sa prononciation.
+                2. Dis-lui gentiment qu'il n'a pas répété la phrase demandée.
+                3. S'il pose une question, réponds-y.
+                4. Redemande-lui de faire l'exercice "{expected_text}".
+                """
+            else:
+                validation_prompt = f"""
+                ✅ VALIDATION OK:
+                L'utilisateur essaie bien de dire "{expected_text}".
+                Tu peux évaluer sa prononciation et passer à la suite.
+                """
+        
         system_prompt = f"""Tu es un professeur de {teaching_lang_name} pour des étudiants {user_lang_name}.
+
+{validation_prompt}
 
 🚨 RÈGLE ABSOLUE - SÉPARATION DES LANGUES 🚨
 
@@ -166,14 +251,28 @@ INTERDICTIONS STRICTES:
 FORMAT JSON OBLIGATOIRE:
 {{
   "segments": [
-    {{"lang": "{user_lang}", "text": "feedback/encouragement UNIQUEMENT en {user_lang_name}"}},
-    {{"lang": "{teaching_lang}", "text": "phrase à pratiquer UNIQUEMENT en {teaching_lang_name}"}}
+    {{"lang": "{user_lang}", "text": "feedback/instruction avec TRADUCTION"}},
+    {{"lang": "{teaching_lang}", "text": "phrase complète à pratiquer"}}
   ]
 }}
+
+RÈGLES DE TRADUCTION:
+- TOUJOURS donner l'équivalent dans les deux langues
+- Format: "Dis X en {teaching_lang_name}" puis donner X en {teaching_lang_name}
+- Exemple FR→RU: "Maintenant ton âge. Dis 'J'ai 25 ans'" → "Мне 25 лет"
+- Exemple RU→FR: "Теперь твой возраст. Скажи 'Мне 25 лет'" → "J'ai 25 ans"
+
+UTILISATION DE L'HISTORIQUE:
+- Consulter l'historique pour voir ce qui a déjà été enseigné
+- NE PAS répéter les mêmes exercices
+- Progresser logiquement: salutation → nom → âge → ville → profession
+- Si l'étudiant a déjà dit son nom, passer à l'âge
+- Si l'étudiant demande "encore", proposer le niveau suivant
 
 EXEMPLES CORRECTS ✅:
 
 Étudiant francophone apprenant le russe:
+
 User: "Bonjour, je veux apprendre"
 {{
   "segments": [
@@ -185,16 +284,25 @@ User: "Bonjour, je veux apprendre"
 User: "Priviet"
 {{
   "segments": [
-    {{"lang": "fr", "text": "Excellent ! Maintenant présente-toi"}},
+    {{"lang": "fr", "text": "Excellent ! Maintenant présente-toi. Dis 'Je m'appelle...'"}},
     {{"lang": "ru", "text": "Меня зовут..."}}
   ]
 }}
 
+User: "Menya zovut Greg"
+{{
+  "segments": [
+    {{"lang": "fr", "text": "Très bien Greg ! Maintenant ton âge. Dis 'J'ai ... ans'"}},
+    {{"lang": "ru", "text": "Мне ... лет"}}
+  ]
+}}
+
 Étudiant russophone apprenant le français:
+
 User: "Привет, я хочу учить французский"
 {{
   "segments": [
-    {{"lang": "ru", "text": "Отлично! Скажи привет по-французски"}},
+    {{"lang": "ru", "text": "Отлично! Скажи привет по-français"}},
     {{"lang": "fr", "text": "Bonjour"}}
   ]
 }}
@@ -202,16 +310,23 @@ User: "Привет, я хочу учить французский"
 User: "Bonjour"
 {{
   "segments": [
-    {{"lang": "ru", "text": "Прекрасно! Теперь представься"}},
+    {{"lang": "ru", "text": "Прекрасно! Теперь представься. Скажи 'Меня зовут...'"}},
     {{"lang": "fr", "text": "Je m'appelle..."}}
   ]
 }}
 
-EXEMPLES INCORRECTS ❌ (À NE JAMAIS FAIRE):
-❌ {{"lang": "ru", "text": "Мой prénom"}}  // Mélange cyrillique + latin
-❌ {{"lang": "fr", "text": "Dis Привет"}}  // Cyrillique dans segment français
-❌ {{"lang": "ru", "text": "Скажи bonjour"}}  // Latin dans segment russe
-❌ {{"lang": "fr", "text": "Très bien! Меня зовут"}}  // Mélange dans un segment
+User: "Je m'appelle Ivan"
+{{
+  "segments": [
+    {{"lang": "ru", "text": "Отлично Иван! Теперь возраст. Скажи 'Мне ... лет'"}},
+    {{"lang": "fr", "text": "J'ai ... ans"}}
+  ]
+}}
+
+EXEMPLES INCORRECTS ❌:
+❌ {{"lang": "fr", "text": "Dis ton âge"}} → Manque la traduction "J'ai ... ans"
+❌ {{"lang": "ru", "text": "Мой prénom"}} → Mélange cyrillique + latin
+❌ Répéter "Привет" si déjà enseigné → Utiliser l'historique pour progresser
 
 PROGRESSION PÉDAGOGIQUE (niveau A1):
 1. Salutation → Привет / Bonjour
@@ -221,28 +336,36 @@ PROGRESSION PÉDAGOGIQUE (niveau A1):
 5. Profession → Я работаю... / Je travaille...
 
 FEEDBACK CONSTRUCTIF:
-- Si correct → féliciter chaleureusement + passer au suivant
-- Si erreur mineure → corriger gentiment + encourager
+- Si correct → féliciter + passer au suivant dans la progression
+- Si erreur mineure → corriger gentiment + redemander
 - Si erreur majeure → revenir à un exemple simple
 - Si perdu → retour aux bases (salutation)
+- Si demande "encore" → consulter historique et proposer le niveau suivant
 
 IMPORTANT:
 - Phrases COURTES (3-7 mots maximum)
 - Vocabulaire SIMPLE niveau débutant
-- Toujours donner la phrase COMPLÈTE à répéter
+- TOUJOURS donner la traduction dans le segment {user_lang_name}
+- TOUJOURS donner la phrase COMPLÈTE à répéter
 - Créer un environnement SANS JUGEMENT
+- UTILISER L'HISTORIQUE pour éviter les répétitions
 
 Réponds UNIQUEMENT en JSON valide."""
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text}
-        ]
+        # Construire les messages avec historique
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Ajouter l'historique si disponible (limité aux 10 derniers échanges)
+        if history:
+            messages.extend(history[-10:])
+        
+        # Ajouter le message actuel
+        messages.append({"role": "user", "content": user_text})
         
         response = await self.chat(messages)
-        return self._parse_response(response, user_lang, teaching_lang)
+        return self._parse_response(response, user_lang, teaching_lang, history)
     
-    def _parse_response(self, content: str, native_lang: str, learning_lang: str) -> dict:
+    def _parse_response(self, content: str, native_lang: str, learning_lang: str, history: list = None) -> dict:
         """Parse et valide la réponse JSON du LLM"""
         try:
             # Nettoyer markdown
@@ -281,10 +404,10 @@ Réponds UNIQUEMENT en JSON valide."""
             # Valider langues des segments
             result["segments"] = self._validate_segments(result["segments"])
             
-            # NOUVEAU: Valider la pureté des langues (pas de mélange)
-            if not self._validate_language_purity(result["segments"], native_lang, learning_lang):
-                print(f"⚠️ Mélange de langues détecté, régénération...")
-                return self._fallback_response("Erreur de mélange de langues", native_lang)
+            # NOUVEAU: Valider la qualité de la réponse (pureté + pédagogie)
+            if not self._validate_response_quality(result["segments"], native_lang, learning_lang, history):
+                print(f"⚠️ Réponse rejetée par les guardrails, régénération...")
+                return self._fallback_response("Erreur de qualité réponse", native_lang)
             
             return result
                 
@@ -356,19 +479,31 @@ Réponds UNIQUEMENT en JSON valide."""
         # Par défaut français (alphabet latin)
         return "fr"
     
-    def _validate_language_purity(self, segments: list, native_lang: str, learning_lang: str) -> bool:
-        """Vérifie qu'il n'y a pas de mélange de langues dans les segments"""
+    def _validate_response_quality(self, segments: list, native_lang: str, learning_lang: str, history: list = None) -> bool:
+        """
+        Valide la qualité de la réponse :
+        1. Pureté des langues (pas de mélange abusif)
+        2. Présence de traductions (pédagogie)
+        3. Pas de répétition abusive (si historique fourni)
+        """
+        
+        # 1. Validation Pureté des Langues
         for seg in segments:
             lang = seg.get("lang")
             text = seg.get("text", "")
             
             if lang == "fr":
                 # Vérifier absence de cyrillique dans segment français
-                cyrillic_chars = [c for c in text if '\u0400' <= c <= '\u04FF']
-                if cyrillic_chars:
-                    print(f"❌ Cyrillique détecté dans segment FR: {text}")
-                    print(f"   Caractères: {cyrillic_chars}")
-                    return False
+                # EXCEPTION: Autoriser si c'est une citation courte (entre guillemets ou < 30% du texte)
+                cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+                total_len = len(text)
+                
+                if cyrillic_count > 0:
+                    ratio = cyrillic_count / total_len if total_len > 0 else 0
+                    # Si plus de 30% de cyrillique et pas de guillemets, c'est suspect
+                    if ratio > 0.3 and not ("'" in text or '"' in text):
+                        print(f"❌ Trop de cyrillique dans segment FR ({ratio:.1%}): {text}")
+                        return False
                     
             elif lang == "ru":
                 # Vérifier présence majoritaire de cyrillique dans segment russe
@@ -378,9 +513,31 @@ Réponds UNIQUEMENT en JSON valide."""
                 # Si le segment contient des lettres et moins de 50% sont cyrilliques → erreur
                 if alpha_count > 0 and cyrillic_count / alpha_count < 0.5:
                     print(f"❌ Pas assez de cyrillique dans segment RU: {text}")
-                    print(f"   Ratio: {cyrillic_count}/{alpha_count} = {cyrillic_count/alpha_count:.1%}")
                     return False
-        
+
+        # 2. Validation Pédagogique (Traductions)
+        # On s'attend à avoir au moins un segment dans chaque langue
+        langs_present = {seg.get("lang") for seg in segments}
+        if "fr" not in langs_present or "ru" not in langs_present:
+            print(f"❌ Manque une langue dans la réponse: {langs_present}")
+            return False
+            
+        # 3. Validation Anti-Répétition (si historique)
+        if history and len(history) >= 2:
+            # Find the last assistant message in the history
+            last_assistant_msg_content = ""
+            for i in reversed(range(len(history))):
+                if history[i]["role"] == "assistant":
+                    last_assistant_msg_content = history[i]["content"]
+                    break
+
+            current_response = " | ".join([f"{seg['lang']}: {seg['text']}" for seg in segments])
+            
+            # If the response is identical to the previous assistant response
+            if last_assistant_msg_content and last_assistant_msg_content == current_response:
+                print(f"❌ Répétition détectée: {current_response}")
+                return False
+
         return True
     
     def evaluate_pronunciation(self, user_text: str, expected_text: str) -> dict:

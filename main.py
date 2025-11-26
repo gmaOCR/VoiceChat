@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from services import STTService, LLMService, TTSService
@@ -26,6 +26,9 @@ app.mount("/audio", StaticFiles(directory="audio_cache"), name="audio")
 stt_service = STTService()
 llm_service = LLMService()
 tts_service = TTSService()
+
+# Historique de conversation par session
+conversation_history = {}  # {session_id: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
 
 # Contexte de session pour suivi exercices
 session_context = {}  # {session_id: {"last_exercise": "phrase_attendue", "lang": "ru"}}
@@ -69,9 +72,27 @@ async def chat_endpoint(
         if not transcription:
             return JSONResponse({"error": "Aucune parole détectée"}, status_code=400)
         
-        # 2. LLM - Génération leçon bilingue
+        # 2. LLM - Génération leçon bilingue avec historique
         start_llm = time.time()
-        result = await llm_service.generate_lesson(transcription, source_lang, target_lang)
+        
+        # Récupérer l'historique de cette session
+        session_history = conversation_history.get(session_id, [])
+        
+        # Récupérer le texte attendu (dernier exercice)
+        expected_text = None
+        if session_id in session_context:
+            ctx = session_context[session_id]
+            if ctx.get("lang") == target_lang:
+                expected_text = ctx.get("last_exercise")
+        
+        # Générer la leçon avec contexte et validation
+        result = await llm_service.generate_lesson(
+            transcription, 
+            source_lang, 
+            target_lang,
+            history=session_history,
+            expected_text=expected_text
+        )
         llm_time = time.time() - start_llm
         
         segments = result.get("segments", [])
@@ -143,6 +164,21 @@ async def chat_endpoint(
         if pronunciation_data:
             response_data["pronunciation"] = pronunciation_data
         
+        # Mettre à jour l'historique de conversation
+        if session_id not in conversation_history:
+            conversation_history[session_id] = []
+        
+        # Ajouter l'échange actuel à l'historique
+        conversation_history[session_id].append({"role": "user", "content": transcription})
+        
+        # Construire la réponse de l'assistant (texte des segments)
+        assistant_response = " | ".join([f"{seg['lang']}: {seg['text']}" for seg in segments])
+        conversation_history[session_id].append({"role": "assistant", "content": assistant_response})
+        
+        # Limiter l'historique à 20 messages (10 échanges)
+        if len(conversation_history[session_id]) > 20:
+            conversation_history[session_id] = conversation_history[session_id][-20:]
+        
         return response_data
     
     except Exception as e:
@@ -150,9 +186,27 @@ async def chat_endpoint(
         return JSONResponse({"error": str(e)}, status_code=500)
     
     finally:
+        # Nettoyage fichier temporaire
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
+@app.get("/evaluate_quality")
+async def evaluate_quality(request: Request):
+    """Évalue la qualité pédagogique de la session actuelle"""
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in conversation_history:
+        return JSONResponse({"error": "Pas d'historique pour cette session"}, status_code=404)
+        
+    history = conversation_history[session_id]
+    report = await llm_service.evaluate_teacher_quality(history)
+    return JSONResponse(report)
+
+@app.get("/debug/history")
+async def debug_history(request: Request):
+    """Affiche l'historique de la session (debug)"""
+    session_id = request.cookies.get("session_id")
+    return JSONResponse(conversation_history.get(session_id, []))
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="localhost", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
