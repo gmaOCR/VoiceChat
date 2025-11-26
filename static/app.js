@@ -57,6 +57,12 @@ async function sendAudio() {
     formData.append("audio", audioBlob, "recording.webm");
     formData.append("source_lang", sourceLang);
     formData.append("target_lang", targetLang);
+    // Ajouter la version API choisie (simple list côté web)
+    const apiVersionSelect = document.getElementById('api-version-select');
+    if (apiVersionSelect) {
+        const apiVersion = apiVersionSelect.value || 'v1';
+        formData.append('api_version', apiVersion);
+    }
 
     // Add user message placeholder
     addMessage("...", "user", true);

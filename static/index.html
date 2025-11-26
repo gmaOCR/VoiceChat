@@ -25,6 +25,13 @@
                     <span>🇷🇺 Я говорю по-русски (Apprendre Français)</span>
                 </label>
             </div>
+            <div class="version-selector">
+                <label for="api-version-select">API Whisper:</label>
+                <select id="api-version-select" name="api_version">
+                    <option value="v1">V1 - Transcribe / Phonemes (par défaut)</option>
+                    <option value="v2" selected>V2 - Pronunciation Analysis (WhisperX)</option>
+                </select>
+            </div>
         </header>
 
         <main id="chat-history">

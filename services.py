@@ -8,7 +8,8 @@ import re
 # Configuration
 OLLAMA_URL = "http://192.168.1.28:11434"
 MODEL_NAME = "llama3:8b"
-WHISPER_API_URL = "http://mars.gregorymariani.com:8001"
+WHISPER_API_URL = "http://mars.gregorymariani.com:8002"
+WHISPER_V2_API_URL = "http://mars.gregorymariani.com:8002"
 
 # Voix TTS par langue
 VOICES = {
@@ -19,7 +20,9 @@ VOICES = {
 class STTService:
     def __init__(self):
         self.api_url = WHISPER_API_URL
+        self.v2_api_url = WHISPER_V2_API_URL
         print(f"Using remote Whisper API: {self.api_url}")
+        print(f"Using remote Whisper V2 API: {self.v2_api_url}")
 
     async def transcribe(self, audio_path: str, language: str = None) -> str:
         """Transcribe audio using remote Whisper large-v3-turbo API"""
@@ -74,6 +77,35 @@ class STTService:
                     
         except Exception as e:
             print(f"⚠️ Phoneme analysis error: {e}")
+            return {"available": False, "score": None, "error": str(e)}
+
+    async def analyze_pronunciation_v2(self, audio_path: str, expected_text: str, language: str) -> dict:
+        """
+        Analyse avancée (V2) via WhisperX + Wav2Vec2 + Silero.
+        Retourne score, phonèmes, et prosodie.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                with open(audio_path, 'rb') as audio_file:
+                    files = {'audio': (os.path.basename(audio_path), audio_file, 'audio/webm')}
+                    data = {
+                        'text': expected_text,
+                        'language': language
+                    }
+                    
+                    response = await client.post(
+                        f"{self.v2_api_url}/analyze_pronunciation",
+                        files=files,
+                        data=data
+                    )
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    result["available"] = True
+                    return result
+                    
+        except Exception as e:
+            print(f"⚠️ V2 Analysis error: {e}")
             return {"available": False, "score": None, "error": str(e)}
 
 class LLMService:
