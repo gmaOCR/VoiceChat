@@ -134,7 +134,7 @@ class LLMService:
 
     async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str) -> dict:
         """
-        Génère une réponse pédagogique bilingue FR/RU uniquement.
+        Génère une réponse pédagogique bilingue FR/RU avec séparation stricte des langues.
         """
         
         # Détecter si l'utilisateur parle français ou russe
@@ -144,43 +144,93 @@ class LLMService:
         # L'autre langue est la langue d'apprentissage
         teaching_lang = "ru" if user_lang == "fr" else "fr"
         
-        system_prompt = f"""Tu es un professeur de langue pour l'apprentissage bidirectionnel français-russe.
+        # Noms de langues pour le prompt
+        lang_names = {
+            "fr": {"name": "français", "script": "latin"},
+            "ru": {"name": "russe", "script": "cyrillique"}
+        }
+        
+        user_lang_name = lang_names[user_lang]["name"]
+        teaching_lang_name = lang_names[teaching_lang]["name"]
+        teaching_script = lang_names[teaching_lang]["script"]
+        
+        system_prompt = f"""Tu es un professeur de {teaching_lang_name} pour des étudiants {user_lang_name}.
 
-RÈGLES CRITIQUES:
-1. Si l'utilisateur parle FRANÇAIS → Réponds en FRANÇAIS + donne phrase RUSSE à pratiquer
-2. Si l'utilisateur parle RUSSE → Réponds en RUSSE + donne phrase FRANÇAISE à pratiquer
-3. Progression pédagogique: salutation → prénom → âge → ville → profession → loisirs
-4. Phrases SIMPLES niveau A1-A2 (3-7 mots maximum)
-5. Toujours donner la phrase COMPLÈTE à répéter, jamais juste "répète"
+🚨 RÈGLE ABSOLUE - SÉPARATION DES LANGUES 🚨
 
-FORMAT JSON STRICT:
-{{"segments": [{{"lang": "{user_lang}", "text": "encouragement/instruction"}}, {{"lang": "{teaching_lang}", "text": "phrase complète à pratiquer"}}]}}
+INTERDICTIONS STRICTES:
+❌ JAMAIS mélanger {user_lang_name} et {teaching_lang_name} dans un même segment
+❌ JAMAIS utiliser des caractères {teaching_script} dans le segment {user_lang_name}
+❌ JAMAIS utiliser des mots {teaching_lang_name} dans le segment {user_lang_name}
 
-EXEMPLES FRANÇAIS → RUSSE:
+FORMAT JSON OBLIGATOIRE:
+{{
+  "segments": [
+    {{"lang": "{user_lang}", "text": "feedback/encouragement UNIQUEMENT en {user_lang_name}"}},
+    {{"lang": "{teaching_lang}", "text": "phrase à pratiquer UNIQUEMENT en {teaching_lang_name}"}}
+  ]
+}}
 
-User: "Bonjour, je veux apprendre le russe"
-{{"segments": [{{"lang": "fr", "text": "Parfait ! Dis bonjour en russe"}}, {{"lang": "ru", "text": "Привет"}}]}}
+EXEMPLES CORRECTS ✅:
+
+Étudiant francophone apprenant le russe:
+User: "Bonjour, je veux apprendre"
+{{
+  "segments": [
+    {{"lang": "fr", "text": "Parfait ! Dis bonjour en russe"}},
+    {{"lang": "ru", "text": "Привет"}}
+  ]
+}}
 
 User: "Priviet"
-{{"segments": [{{"lang": "fr", "text": "Excellent ! Maintenant présente-toi"}}, {{"lang": "ru", "text": "Меня зовут..."}}]}}
+{{
+  "segments": [
+    {{"lang": "fr", "text": "Excellent ! Maintenant présente-toi"}},
+    {{"lang": "ru", "text": "Меня зовут..."}}
+  ]
+}}
 
-User: "Menya zovut Greg"
-{{"segments": [{{"lang": "fr", "text": "Très bien Greg ! Demande comment ça va"}}, {{"lang": "ru", "text": "Как дела?"}}]}}
-
-EXEMPLES RUSSE → FRANÇAIS:
-
+Étudiant russophone apprenant le français:
 User: "Привет, я хочу учить французский"
-{{"segments": [{{"lang": "ru", "text": "Отлично! Скажи привет по-французски"}}, {{"lang": "fr", "text": "Bonjour"}}]}}
+{{
+  "segments": [
+    {{"lang": "ru", "text": "Отлично! Скажи привет по-французски"}},
+    {{"lang": "fr", "text": "Bonjour"}}
+  ]
+}}
 
 User: "Bonjour"
-{{"segments": [{{"lang": "ru", "text": "Прекрасно! Теперь представься"}}, {{"lang": "fr", "text": "Je m'appelle..."}}]}}
+{{
+  "segments": [
+    {{"lang": "ru", "text": "Прекрасно! Теперь представься"}},
+    {{"lang": "fr", "text": "Je m'appelle..."}}
+  ]
+}}
+
+EXEMPLES INCORRECTS ❌ (À NE JAMAIS FAIRE):
+❌ {{"lang": "ru", "text": "Мой prénom"}}  // Mélange cyrillique + latin
+❌ {{"lang": "fr", "text": "Dis Привет"}}  // Cyrillique dans segment français
+❌ {{"lang": "ru", "text": "Скажи bonjour"}}  // Latin dans segment russe
+❌ {{"lang": "fr", "text": "Très bien! Меня зовут"}}  // Mélange dans un segment
+
+PROGRESSION PÉDAGOGIQUE (niveau A1):
+1. Salutation → Привет / Bonjour
+2. Prénom → Меня зовут... / Je m'appelle...
+3. Âge → Мне ... лет / J'ai ... ans
+4. Ville → Я живу в... / J'habite à...
+5. Profession → Я работаю... / Je travaille...
+
+FEEDBACK CONSTRUCTIF:
+- Si correct → féliciter chaleureusement + passer au suivant
+- Si erreur mineure → corriger gentiment + encourager
+- Si erreur majeure → revenir à un exemple simple
+- Si perdu → retour aux bases (salutation)
 
 IMPORTANT:
-- JAMAIS de mélange de langues dans un même segment
-- Toujours donner la phrase ENTIÈRE en langue cible (pas "répète X")
-- Adapter les phrases russes au CONTEXTE (pas de traduction littérale)
-- Si l'utilisateur répète mal → corriger gentiment et redemander
-- Si l'utilisateur est perdu → revenir aux bases (Привет / Bonjour)
+- Phrases COURTES (3-7 mots maximum)
+- Vocabulaire SIMPLE niveau débutant
+- Toujours donner la phrase COMPLÈTE à répéter
+- Créer un environnement SANS JUGEMENT
 
 Réponds UNIQUEMENT en JSON valide."""
 
@@ -230,6 +280,12 @@ Réponds UNIQUEMENT en JSON valide."""
             
             # Valider langues des segments
             result["segments"] = self._validate_segments(result["segments"])
+            
+            # NOUVEAU: Valider la pureté des langues (pas de mélange)
+            if not self._validate_language_purity(result["segments"], native_lang, learning_lang):
+                print(f"⚠️ Mélange de langues détecté, régénération...")
+                return self._fallback_response("Erreur de mélange de langues", native_lang)
+            
             return result
                 
         except json.JSONDecodeError as e:
@@ -299,7 +355,33 @@ Réponds UNIQUEMENT en JSON valide."""
         
         # Par défaut français (alphabet latin)
         return "fr"
-        return "fr"
+    
+    def _validate_language_purity(self, segments: list, native_lang: str, learning_lang: str) -> bool:
+        """Vérifie qu'il n'y a pas de mélange de langues dans les segments"""
+        for seg in segments:
+            lang = seg.get("lang")
+            text = seg.get("text", "")
+            
+            if lang == "fr":
+                # Vérifier absence de cyrillique dans segment français
+                cyrillic_chars = [c for c in text if '\u0400' <= c <= '\u04FF']
+                if cyrillic_chars:
+                    print(f"❌ Cyrillique détecté dans segment FR: {text}")
+                    print(f"   Caractères: {cyrillic_chars}")
+                    return False
+                    
+            elif lang == "ru":
+                # Vérifier présence majoritaire de cyrillique dans segment russe
+                cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+                alpha_count = sum(1 for c in text if c.isalpha())
+                
+                # Si le segment contient des lettres et moins de 50% sont cyrilliques → erreur
+                if alpha_count > 0 and cyrillic_count / alpha_count < 0.5:
+                    print(f"❌ Pas assez de cyrillique dans segment RU: {text}")
+                    print(f"   Ratio: {cyrillic_count}/{alpha_count} = {cyrillic_count/alpha_count:.1%}")
+                    return False
+        
+        return True
     
     def evaluate_pronunciation(self, user_text: str, expected_text: str) -> dict:
         """
