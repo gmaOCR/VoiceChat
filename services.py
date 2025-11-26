@@ -134,46 +134,55 @@ class LLMService:
 
     async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str) -> dict:
         """
-        Génère une réponse pédagogique bilingue.
-        
-        Principe:
-        - Étudiant français apprenant russe: native_lang='fr', learning_lang='ru'
-        - Étudiant parle FR → IA répond en FR + exemples RU
-        - Étudiant parle RU → IA donne feedback FR + correction RU
+        Génère une réponse pédagogique bilingue FR/RU uniquement.
         """
         
-        lang_names = {"fr": "français", "ru": "russe"}
-        native_name = lang_names[native_lang]
-        learning_name = lang_names[learning_lang]
+        # Détecter si l'utilisateur parle français ou russe
+        is_russian = any('\u0400' <= c <= '\u04FF' for c in user_text)
+        user_lang = "ru" if is_russian else "fr"
         
-        system_prompt = f"""Tu es prof de {learning_name} pour {native_name}.
+        # L'autre langue est la langue d'apprentissage
+        teaching_lang = "ru" if user_lang == "fr" else "fr"
+        
+        system_prompt = f"""Tu es un professeur de langue pour l'apprentissage bidirectionnel français-russe.
 
-MISSION: Enseigner par PRATIQUE IMMÉDIATE, pas de théorie.
+RÈGLES CRITIQUES:
+1. Si l'utilisateur parle FRANÇAIS → Réponds en FRANÇAIS + donne phrase RUSSE à pratiquer
+2. Si l'utilisateur parle RUSSE → Réponds en RUSSE + donne phrase FRANÇAISE à pratiquer
+3. Progression pédagogique: salutation → prénom → âge → ville → profession → loisirs
+4. Phrases SIMPLES niveau A1-A2 (3-7 mots maximum)
+5. Toujours donner la phrase COMPLÈTE à répéter, jamais juste "répète"
 
-COMPORTEMENT:
-1. Si élève SALUE/DEMANDE → Donne DIRECTEMENT un mot/{learning_name} simple à répéter
-2. Si élève RÉPÈTE en {learning_name} → Corrige si erreur OU pose NOUVELLE question simple
-3. TOUJOURS donner le MOT/PHRASE complète à répéter ou à dire
+FORMAT JSON STRICT:
+{{"segments": [{{"lang": "{user_lang}", "text": "encouragement/instruction"}}, {{"lang": "{teaching_lang}", "text": "phrase complète à pratiquer"}}]}}
 
-EXEMPLES:
-Input: "Bonjour, je veux apprendre"
-{{"segments": [{{"lang": "fr", "text": "Dis bonjour en russe"}}, {{"lang": "ru", "text": "Привет"}}]}}
+EXEMPLES FRANÇAIS → RUSSE:
 
-Input: "Привет"
-{{"segments": [{{"lang": "fr", "text": "Parfait, maintenant ton nom"}}, {{"lang": "ru", "text": "Меня зовут"}}]}}
+User: "Bonjour, je veux apprendre le russe"
+{{"segments": [{{"lang": "fr", "text": "Parfait ! Dis bonjour en russe"}}, {{"lang": "ru", "text": "Привет"}}]}}
 
-Input: "Меня зовут Грег"
-{{"segments": [{{"lang": "fr", "text": "Très bien Greg"}}, {{"lang": "ru", "text": "Сколько тебе лет"}}]}}
+User: "Priviet"
+{{"segments": [{{"lang": "fr", "text": "Excellent ! Maintenant présente-toi"}}, {{"lang": "ru", "text": "Меня зовут..."}}]}}
 
-RÈGLES:
-- TOUJOURS donner la phrase COMPLÈTE en {learning_name} (pas juste "répète")
-- Phrases COURTES (3-6 mots)
-- Questions SIMPLES niveau débutant
-- Progression: salutation → nom → âge → pays → hobby
-- JSON strict: {{"segments": [{{"lang": "xx", "text": "..."}}, ...]}}
-- 2 segments: feedback + mot/phrase à dire
+User: "Menya zovut Greg"
+{{"segments": [{{"lang": "fr", "text": "Très bien Greg ! Demande comment ça va"}}, {{"lang": "ru", "text": "Как дела?"}}]}}
 
-Réponds UNIQUEMENT en JSON."""
+EXEMPLES RUSSE → FRANÇAIS:
+
+User: "Привет, я хочу учить французский"
+{{"segments": [{{"lang": "ru", "text": "Отлично! Скажи привет по-французски"}}, {{"lang": "fr", "text": "Bonjour"}}]}}
+
+User: "Bonjour"
+{{"segments": [{{"lang": "ru", "text": "Прекрасно! Теперь представься"}}, {{"lang": "fr", "text": "Je m'appelle..."}}]}}
+
+IMPORTANT:
+- JAMAIS de mélange de langues dans un même segment
+- Toujours donner la phrase ENTIÈRE en langue cible (pas "répète X")
+- Adapter les phrases russes au CONTEXTE (pas de traduction littérale)
+- Si l'utilisateur répète mal → corriger gentiment et redemander
+- Si l'utilisateur est perdu → revenir aux bases (Привет / Bonjour)
+
+Réponds UNIQUEMENT en JSON valide."""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -181,7 +190,7 @@ Réponds UNIQUEMENT en JSON."""
         ]
         
         response = await self.chat(messages)
-        return self._parse_response(response, native_lang, learning_lang)
+        return self._parse_response(response, user_lang, teaching_lang)
     
     def _parse_response(self, content: str, native_lang: str, learning_lang: str) -> dict:
         """Parse et valide la réponse JSON du LLM"""
@@ -252,6 +261,7 @@ Réponds UNIQUEMENT en JSON."""
             
             # Détection automatique
             detected_lang = self._detect_language(text)
+            print(f"🔍 Segment détecté: lang={detected_lang}, text={text[:50]}...")
             
             validated.append({
                 "lang": detected_lang,
@@ -261,24 +271,34 @@ Réponds UNIQUEMENT en JSON."""
         return validated
     
     def _detect_language(self, text: str) -> str:
-        """Détecte si texte est français ou russe"""
-        # Cyrillique = russe
-        if any('\u0400' <= c <= '\u04FF' for c in text):
-            return "ru"
-        
-        # Mots français communs
-        french_words = ['le', 'la', 'les', 'un', 'une', 'de', 'du', 'je', 'tu', 'il', 
-                       'est', 'comment', 'dit', 'on', 'en', 'à', 'au', 'et', 'mais']
+        """Détecte si texte est français ou russe basé sur les mots-clés puis le ratio de caractères"""
         text_lower = text.lower()
         
-        if any(f" {word} " in f" {text_lower} " for word in french_words):
+        # 1. Vérifier d'abord les mots français communs (priorité haute)
+        french_words = ['le', 'la', 'les', 'un', 'une', 'de', 'du', 'je', 'tu', 'il', 
+                       'est', 'comment', 'dit', 'on', 'en', 'à', 'au', 'et', 'mais',
+                       'super', 'commence', 'par', 'dire', 'dis', 'bien', 'sûr',
+                       'bonjour', 'salut', 'merci', 'oui', 'non', 'pour', 'avec']
+        
+        # Si on trouve plusieurs mots français → français
+        french_word_count = sum(1 for word in french_words if f" {word} " in f" {text_lower} ")
+        if french_word_count >= 2:  # Au moins 2 mots français
             return "fr"
         
-        # Patterns français
-        if any(p in text_lower for p in ["dit-on", "qu'", "c'est", "n'", "d'", "l'"]):
+        # 2. Patterns français typiques
+        if any(p in text_lower for p in ["dit-on", "qu'", "c'est", "n'", "d'", "l'", "j'", "s'"]):
             return "fr"
+        
+        # 3. Compter les caractères cyrilliques vs latins (seulement si pas de mots français clairs)
+        cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+        latin_count = sum(1 for c in text if c.isalpha() and not ('\u0400' <= c <= '\u04FF'))
+        
+        # Si majorité cyrillique ET pas de mots français → russe
+        if cyrillic_count > 0 and cyrillic_count > latin_count and french_word_count == 0:
+            return "ru"
         
         # Par défaut français (alphabet latin)
+        return "fr"
         return "fr"
     
     def evaluate_pronunciation(self, user_text: str, expected_text: str) -> dict:

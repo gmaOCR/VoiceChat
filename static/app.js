@@ -86,25 +86,20 @@ async function sendAudio() {
         // Display User Text
         addMessage(data.user_text, "user");
 
-        // Display pronunciation score if exists
-        if (data.pronunciation_score !== undefined) {
-            const scoreEmoji = data.pronunciation_score >= 80 ? '🎯' : 
-                             data.pronunciation_score >= 50 ? '👍' : '🔄';
-            addMessage(`${scoreEmoji} Prononciation: ${data.pronunciation_score}%`, "score");
-        }
-
-        // Display Correction if exists
-        if (data.correction) {
-            addMessage(`✓ Correction: ${data.correction}`, "correction");
+        // Display pronunciation analysis if exists
+        if (data.pronunciation) {
+            displayPronunciationFeedback(data.pronunciation);
         }
 
         // Display AI Segments with language indicators
         if (data.segments && data.segments.length > 0) {
-            data.segments.forEach(segment => {
+            let combinedMessage = '';
+            data.segments.forEach((segment, index) => {
                 const langFlag = segment.lang === 'fr' ? '🇫🇷' : '🇷🇺';
-                const langName = segment.lang === 'fr' ? 'Français' : 'Русский';
-                addMessage(`${langFlag} <strong>${langName}:</strong> ${segment.text}`, "ai", false, true);
+                if (index > 0) combinedMessage += ' ';
+                combinedMessage += `${langFlag} ${segment.text}`;
             });
+            addMessage(combinedMessage, "ai", false, false);
         }
 
         // Play Audio Segments Sequentially
@@ -149,3 +144,58 @@ function addMessage(text, sender, isPlaceholder = false, isHtml = false) {
     chatHistory.appendChild(div);
     chatHistory.scrollTop = chatHistory.scrollHeight;
 }
+
+function displayPronunciationFeedback(pronunciation) {
+    const div = document.createElement('div');
+    div.classList.add('pronunciation-panel');
+    
+    const score = pronunciation.score || 0;
+    const scoreClass = score >= 80 ? 'excellent' : score >= 60 ? 'good' : 'needs-work';
+    const scoreEmoji = score >= 80 ? '🎯' : score >= 60 ? '👍' : '🔄';
+    
+    let html = `
+        <div class="pronunciation-header">
+            <h4>${scoreEmoji} Prononciation: ${score.toFixed(1)}%</h4>
+        </div>
+        <div class="score-bar ${scoreClass}">
+            <div class="score-fill" style="width: ${score}%"></div>
+        </div>
+    `;
+    
+    // Word-level feedback
+    if (pronunciation.words && pronunciation.words.length > 0) {
+        html += '<div class="words-analysis">';
+        pronunciation.words.forEach(word => {
+            const wordScore = word.score || 0;
+            const wordClass = wordScore >= 80 ? 'word-good' : wordScore >= 60 ? 'word-ok' : 'word-bad';
+            html += `<span class="word-badge ${wordClass}" title="Score: ${wordScore}%">${word.word}</span>`;
+        });
+        html += '</div>';
+    }
+    
+    // Prosody metrics
+    if (pronunciation.prosody) {
+        const p = pronunciation.prosody;
+        html += '<div class="prosody-metrics">';
+        if (p.average_pitch_hz) {
+            html += `<div class="metric">🎵 Pitch: ${p.average_pitch_hz.toFixed(0)} Hz</div>`;
+        }
+        if (p.speech_rate_wps) {
+            html += `<div class="metric">⏱️ Vitesse: ${p.speech_rate_wps.toFixed(1)} mots/s</div>`;
+        }
+        if (p.duration_s) {
+            html += `<div class="metric">⏳ Durée: ${p.duration_s.toFixed(1)}s</div>`;
+        }
+        html += '</div>';
+    }
+    
+    // Feedback message
+    if (pronunciation.feedback) {
+        html += `<div class="feedback-message">${pronunciation.feedback}</div>`;
+    }
+    
+    div.innerHTML = html;
+    chatHistory.appendChild(div);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+

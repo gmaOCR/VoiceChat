@@ -200,3 +200,112 @@ footer {
     font-size: 0.85rem;
     color: var(--secondary-text-color);
 }
+
+/* Pronunciation Panel Styles */
+.pronunciation-panel {
+    align-self: center;
+    background: linear-gradient(135deg, #1e2a3a 0%, #2a3f5f 100%);
+    border: 2px solid #4a7ba7;
+    border-radius: 16px;
+    padding: 20px;
+    max-width: 90%;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    margin: 10px 0;
+}
+
+.pronunciation-header h4 {
+    margin: 0 0 15px 0;
+    font-size: 1.2rem;
+    color: #ffffff;
+    text-align: center;
+}
+
+.score-bar {
+    height: 24px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 15px;
+}
+
+.score-fill {
+    height: 100%;
+    transition: width 0.5s ease;
+    border-radius: 12px;
+}
+
+.score-bar.excellent .score-fill {
+    background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+}
+
+.score-bar.good .score-fill {
+    background: linear-gradient(90deg, #ffc107 0%, #ffeb3b 100%);
+}
+
+.score-bar.needs-work .score-fill {
+    background: linear-gradient(90deg, #f44336 0%, #ff9800 100%);
+}
+
+.words-analysis {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 15px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+}
+
+.word-badge {
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: help;
+    transition: transform 0.2s;
+}
+
+.word-badge:hover {
+    transform: scale(1.05);
+}
+
+.word-badge.word-good {
+    background: #4caf50;
+    color: #ffffff;
+}
+
+.word-badge.word-ok {
+    background: #ffc107;
+    color: #000000;
+}
+
+.word-badge.word-bad {
+    background: #f44336;
+    color: #ffffff;
+}
+
+.prosody-metrics {
+    display: flex;
+    justify-content: space-around;
+    gap: 10px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.prosody-metrics .metric {
+    font-size: 0.85rem;
+    color: #b0b0b0;
+    text-align: center;
+}
+
+.feedback-message {
+    margin-top: 10px;
+    padding: 10px;
+    background: rgba(187, 134, 252, 0.1);
+    border-left: 3px solid var(--primary-color);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    color: var(--primary-color);
+}

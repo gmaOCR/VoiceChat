@@ -81,39 +81,36 @@ async def chat_endpoint(
             return JSONResponse({"error": "Erreur génération réponse"}, status_code=500)
         
         # Évaluer prononciation si contexte existe
-        pronunciation_score = None
-        phoneme_analysis = None
+        pronunciation_data = None
         
         if session_id in session_context:
             ctx = session_context[session_id]
             if ctx.get("last_exercise") and ctx.get("lang") == target_lang:
-                # Analyse basique (similarité texte)
-                eval_result = llm_service.evaluate_pronunciation(transcription, ctx["last_exercise"])
-                pronunciation_score = eval_result["score"]
-                
-                # Analyse phonétique MFA (si disponible)
+                # Analyse avancée avec WhisperX V2
                 try:
-                    phoneme_result = await stt_service.analyze_phonemes(
+                    v2_result = await stt_service.analyze_pronunciation_v2(
                         temp_audio_path,
                         ctx["last_exercise"],
                         target_lang
                     )
                     
-                    if phoneme_result.get("available"):
-                        phoneme_analysis = {
-                            "mfa_score": phoneme_result.get("score"),
-                            "phonemes_count": len(phoneme_result.get("phonemes", [])),
-                            "words_count": len(phoneme_result.get("words", []))
+                    if v2_result.get("available"):
+                        pronunciation_data = {
+                            "score": v2_result.get("pronunciation_score", 0),
+                            "words": v2_result.get("words", []),
+                            "prosody": v2_result.get("prosody", {}),
+                            "transcription": v2_result.get("transcription", "")
                         }
-                        # Utiliser score MFA si disponible (plus précis)
-                        if phoneme_result.get("score"):
-                            pronunciation_score = phoneme_result["score"]
-                        
-                        logger.info(f"🎯 MFA: {phoneme_result.get('score')}% - {len(phoneme_result.get('phonemes', []))} phonèmes")
+                        logger.info(f"🎯 Prononciation V2: {pronunciation_data['score']}% - {len(pronunciation_data['words'])} mots")
                 except Exception as e:
-                    logger.warning(f"⚠️ MFA analysis failed: {e}")
-                
-                logger.info(f"🎯 Prononciation: {pronunciation_score}% - {eval_result['feedback']}")
+                    logger.warning(f"⚠️ V2 analysis failed: {e}")
+                    # Fallback sur analyse basique
+                    eval_result = llm_service.evaluate_pronunciation(transcription, ctx["last_exercise"])
+                    pronunciation_data = {
+                        "score": eval_result["score"],
+                        "feedback": eval_result["feedback"]
+                    }
+                    logger.info(f"🎯 Prononciation (fallback): {pronunciation_data['score']}% - {eval_result['feedback']}")
         
         # Sauvegarder dernier exercice (phrase en langue cible)
         last_exercise = None
@@ -143,11 +140,8 @@ async def chat_endpoint(
             "audio_segments": audio_segments
         }
         
-        if pronunciation_score is not None:
-            response_data["pronunciation_score"] = pronunciation_score
-        
-        if phoneme_analysis:
-            response_data["phoneme_analysis"] = phoneme_analysis
+        if pronunciation_data:
+            response_data["pronunciation"] = pronunciation_data
         
         return response_data
     
