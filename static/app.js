@@ -80,6 +80,13 @@ async function sendAudio() {
         // Display User Text
         addMessage(data.user_text, "user");
 
+        // Display pronunciation score if exists
+        if (data.pronunciation_score !== undefined) {
+            const scoreEmoji = data.pronunciation_score >= 80 ? '🎯' : 
+                             data.pronunciation_score >= 50 ? '👍' : '🔄';
+            addMessage(`${scoreEmoji} Prononciation: ${data.pronunciation_score}%`, "score");
+        }
+
         // Display Correction if exists
         if (data.correction) {
             addMessage(`✓ Correction: ${data.correction}`, "correction");

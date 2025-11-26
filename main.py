@@ -27,6 +27,9 @@ stt_service = STTService()
 llm_service = LLMService()
 tts_service = TTSService()
 
+# Contexte de session pour suivi exercices
+session_context = {}  # {session_id: {"last_exercise": "phrase_attendue", "lang": "ru"}}
+
 @app.get("/")
 async def read_index():
     return FileResponse("static/index.html")
@@ -77,6 +80,54 @@ async def chat_endpoint(
         if not segments:
             return JSONResponse({"error": "Erreur génération réponse"}, status_code=500)
         
+        # Évaluer prononciation si contexte existe
+        pronunciation_score = None
+        phoneme_analysis = None
+        
+        if session_id in session_context:
+            ctx = session_context[session_id]
+            if ctx.get("last_exercise") and ctx.get("lang") == target_lang:
+                # Analyse basique (similarité texte)
+                eval_result = llm_service.evaluate_pronunciation(transcription, ctx["last_exercise"])
+                pronunciation_score = eval_result["score"]
+                
+                # Analyse phonétique MFA (si disponible)
+                try:
+                    phoneme_result = await stt_service.analyze_phonemes(
+                        temp_audio_path,
+                        ctx["last_exercise"],
+                        target_lang
+                    )
+                    
+                    if phoneme_result.get("available"):
+                        phoneme_analysis = {
+                            "mfa_score": phoneme_result.get("score"),
+                            "phonemes_count": len(phoneme_result.get("phonemes", [])),
+                            "words_count": len(phoneme_result.get("words", []))
+                        }
+                        # Utiliser score MFA si disponible (plus précis)
+                        if phoneme_result.get("score"):
+                            pronunciation_score = phoneme_result["score"]
+                        
+                        logger.info(f"🎯 MFA: {phoneme_result.get('score')}% - {len(phoneme_result.get('phonemes', []))} phonèmes")
+                except Exception as e:
+                    logger.warning(f"⚠️ MFA analysis failed: {e}")
+                
+                logger.info(f"🎯 Prononciation: {pronunciation_score}% - {eval_result['feedback']}")
+        
+        # Sauvegarder dernier exercice (phrase en langue cible)
+        last_exercise = None
+        for seg in segments:
+            if seg.get("lang") == target_lang:
+                last_exercise = seg.get("text")
+                break
+        
+        if last_exercise:
+            session_context[session_id] = {
+                "last_exercise": last_exercise,
+                "lang": target_lang
+            }
+        
         # 3. TTS - Synthèse audio
         start_tts = time.time()
         audio_segments = await tts_service.generate_segments(segments, session_id)
@@ -86,11 +137,19 @@ async def chat_endpoint(
         total_time = time.time() - start_total
         logger.info(f"⏱️ TOTAL: {total_time:.2f}s | STT:{stt_time:.1f}s ({stt_time/total_time*100:.0f}%) LLM:{llm_time:.1f}s ({llm_time/total_time*100:.0f}%) TTS:{tts_time:.1f}s ({tts_time/total_time*100:.0f}%)")
         
-        return {
+        response_data = {
             "user_text": transcription,
             "segments": segments,
             "audio_segments": audio_segments
         }
+        
+        if pronunciation_score is not None:
+            response_data["pronunciation_score"] = pronunciation_score
+        
+        if phoneme_analysis:
+            response_data["phoneme_analysis"] = phoneme_analysis
+        
+        return response_data
     
     except Exception as e:
         logger.error(f"❌ Erreur: {e}", exc_info=True)

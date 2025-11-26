@@ -116,6 +116,20 @@ main {
     max-width: 90%;
 }
 
+.message.score {
+    align-self: center;
+    background: linear-gradient(135deg, #1a3a52 0%, #2d5a7b 100%);
+    border: 2px solid #4a7ba7;
+    border-radius: 20px;
+    color: #ffffff;
+    font-size: 1.1rem;
+    font-weight: bold;
+    padding: 10px 20px;
+    text-align: center;
+    max-width: 50%;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
 .correction {
     display: block;
     margin-top: 8px;

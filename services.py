@@ -42,6 +42,39 @@ class STTService:
         except Exception as e:
             print(f"Error transcribing audio: {e}")
             raise
+    
+    async def analyze_phonemes(self, audio_path: str, expected_text: str, language: str) -> dict:
+        """
+        Analyse phonétique via MFA sur serveur distant.
+        Retourne score et détails phonèmes.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                with open(audio_path, 'rb') as audio_file:
+                    files = {'audio': (os.path.basename(audio_path), audio_file, 'audio/webm')}
+                    data = {
+                        'text': expected_text,
+                        'language': language
+                    }
+                    
+                    response = await client.post(
+                        f"{self.api_url}/analyze_phonemes",
+                        files=files,
+                        data=data
+                    )
+                    
+                    if response.status_code == 503:
+                        # MFA non disponible
+                        return {"available": False, "score": None}
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    result["available"] = True
+                    return result
+                    
+        except Exception as e:
+            print(f"⚠️ Phoneme analysis error: {e}")
+            return {"available": False, "score": None, "error": str(e)}
 
 class LLMService:
     def __init__(self, base_url=OLLAMA_URL, model=MODEL_NAME):
@@ -86,26 +119,27 @@ class LLMService:
 MISSION: Enseigner par PRATIQUE IMMÉDIATE, pas de théorie.
 
 COMPORTEMENT:
-1. Si élève SALUE/DEMANDE → Donne UN mot/phrase en {learning_name} à répéter
-2. Si élève RÉPÈTE en {learning_name} → Corrige si erreur OU pose NOUVELLE question simple en {learning_name}
-3. TOUJOURS alterner: Question en {learning_name} → Élève répond → Feedback en {native_name}
+1. Si élève SALUE/DEMANDE → Donne DIRECTEMENT un mot/{learning_name} simple à répéter
+2. Si élève RÉPÈTE en {learning_name} → Corrige si erreur OU pose NOUVELLE question simple
+3. TOUJOURS donner le MOT/PHRASE complète à répéter ou à dire
 
 EXEMPLES:
 Input: "Bonjour, je veux apprendre"
-{{"segments": [{{"lang": "fr", "text": "Répète après moi"}}, {{"lang": "ru", "text": "Привет"}}]}}
+{{"segments": [{{"lang": "fr", "text": "Dis bonjour en russe"}}, {{"lang": "ru", "text": "Привет"}}]}}
 
 Input: "Привет"
-{{"segments": [{{"lang": "fr", "text": "Parfait"}}, {{"lang": "ru", "text": "Как тебя зовут"}}]}}
+{{"segments": [{{"lang": "fr", "text": "Parfait, maintenant ton nom"}}, {{"lang": "ru", "text": "Меня зовут"}}]}}
 
 Input: "Меня зовут Грег"
-{{"segments": [{{"lang": "fr", "text": "Très bien"}}, {{"lang": "ru", "text": "Сколько тебе лет"}}]}}
+{{"segments": [{{"lang": "fr", "text": "Très bien Greg"}}, {{"lang": "ru", "text": "Сколько тебе лет"}}]}}
 
 RÈGLES:
-- Phrases COURTES (3-6 mots en {learning_name})
+- TOUJOURS donner la phrase COMPLÈTE en {learning_name} (pas juste "répète")
+- Phrases COURTES (3-6 mots)
 - Questions SIMPLES niveau débutant
-- Progression naturelle: salutation → nom → âge → nationalité → hobby
+- Progression: salutation → nom → âge → pays → hobby
 - JSON strict: {{"segments": [{{"lang": "xx", "text": "..."}}, ...]}}
-- 2 segments: feedback + nouvelle question
+- 2 segments: feedback + mot/phrase à dire
 
 Réponds UNIQUEMENT en JSON."""
 
@@ -142,6 +176,10 @@ Réponds UNIQUEMENT en JSON."""
                         break
             
             json_str = content[start:end]
+            
+            # Debug: afficher le JSON extrait
+            print(f"📋 JSON extrait: {json_str[:200]}")
+            
             result = json.loads(json_str)
             
             # Valider structure
@@ -210,6 +248,35 @@ Réponds UNIQUEMENT en JSON."""
         
         # Par défaut français (alphabet latin)
         return "fr"
+    
+    def evaluate_pronunciation(self, user_text: str, expected_text: str) -> dict:
+        """
+        Évalue basiquement la prononciation en comparant la transcription.
+        Retourne score et feedback.
+        """
+        user_lower = user_text.lower().strip()
+        expected_lower = expected_text.lower().strip()
+        
+        # Exact match = parfait
+        if user_lower == expected_lower:
+            return {"score": 100, "feedback": "Parfait"}
+        
+        # Calculer similarité simple (mots en commun)
+        user_words = set(user_lower.split())
+        expected_words = set(expected_lower.split())
+        
+        if not expected_words:
+            return {"score": 0, "feedback": "Erreur"}
+        
+        common = user_words & expected_words
+        similarity = len(common) / len(expected_words) * 100
+        
+        if similarity >= 80:
+            return {"score": int(similarity), "feedback": "Très bien"}
+        elif similarity >= 50:
+            return {"score": int(similarity), "feedback": "Bien, attention à la prononciation"}
+        else:
+            return {"score": int(similarity), "feedback": "Essaie encore"}
 
 class TTSService:
     @staticmethod
