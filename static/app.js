@@ -63,6 +63,11 @@ async function sendAudio() {
         const apiVersion = apiVersionSelect.value || 'v1';
         formData.append('api_version', apiVersion);
     }
+    
+    // Determine level
+    const levelSelect = document.getElementById('level-select');
+    const level = levelSelect ? levelSelect.value : 'A1';
+    formData.append('level', level);
 
     // Add user message placeholder
     addMessage("...", "user", true);
@@ -89,6 +94,11 @@ async function sendAudio() {
         // Display pronunciation analysis if exists
         if (data.pronunciation) {
             displayPronunciationFeedback(data.pronunciation);
+        }
+
+        // Display Correction/Explanation
+        if (data.user_analysis) {
+            displayCorrection(data.user_analysis);
         }
 
         // Display AI Segments with language indicators
@@ -193,6 +203,54 @@ function displayPronunciationFeedback(pronunciation) {
     if (pronunciation.feedback) {
         html += `<div class="feedback-message">${pronunciation.feedback}</div>`;
     }
+    
+    div.innerHTML = html;
+    chatHistory.appendChild(div);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+function displayCorrection(analysis) {
+    if (!analysis || (!analysis.corrected_text && !analysis.explanation)) return;
+
+    const div = document.createElement('div');
+    div.classList.add('correction-panel');
+    
+    let html = '';
+    
+    // Header based on correctness
+    const isCorrect = analysis.is_correct;
+    const icon = isCorrect ? '✨' : '💡';
+    const title = isCorrect ? 'Parfait !' : 'Correction';
+    const headerClass = isCorrect ? 'correct' : 'incorrect';
+    
+    html += `
+        <div class="correction-header ${headerClass}">
+            <span class="icon">${icon}</span>
+            <span class="title">${title}</span>
+        </div>
+    `;
+    
+    // Correction body
+    html += '<div class="correction-body">';
+    
+    if (!isCorrect && analysis.corrected_text) {
+        html += `
+            <div class="correction-text">
+                <span class="label">Tu aurais dû dire :</span>
+                <span class="text">"${analysis.corrected_text}"</span>
+            </div>
+        `;
+    }
+    
+    if (analysis.explanation) {
+        html += `
+            <div class="correction-explanation">
+                ${analysis.explanation}
+            </div>
+        `;
+    }
+    
+    html += '</div>';
     
     div.innerHTML = html;
     chatHistory.appendChild(div);

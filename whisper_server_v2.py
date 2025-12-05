@@ -11,7 +11,6 @@ pip install librosa soundfile numpy scipy
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import torch
-import torchaudio
 import whisperx
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import numpy as np
@@ -19,9 +18,7 @@ import tempfile
 import os
 from huggingface_hub import HfFolder
 import logging
-import json
 import librosa
-from pathlib import Path
 from contextlib import asynccontextmanager
 import traceback
 
@@ -46,7 +43,6 @@ async def lifespan(app: FastAPI):
     # Configuration
     global DEVICE, BATCH_SIZE, COMPUTE_TYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    BATCH_SIZE = 16
     COMPUTE_TYPE = "float16" if torch.cuda.is_available() else "int8"
     
     HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_FACE_TOKEN")
@@ -129,6 +125,7 @@ async def analyze_pronunciation(
             content = await audio.read()
             tmp_file.write(content)
             audio_path = tmp_file.name
+            logger.info(f"📥 Received audio for analysis: {len(content)} bytes")
 
         # 2. Transcription (WhisperX)
         logger.info("Transcribing...")
@@ -223,6 +220,7 @@ async def transcribe(
             content = await audio.read()
             tmp_file.write(content)
             audio_path = tmp_file.name
+            logger.info(f"📥 Received audio for transcription: {len(content)} bytes")
 
         # 2. Transcription
         if whisper_model is None:
@@ -233,10 +231,15 @@ async def transcribe(
         
         # Note: WhisperX auto-détecte la langue, ne pas passer le paramètre language
         # car cela cause un conflit avec faster-whisper tokenizer
-        options = {"batch_size": BATCH_SIZE}
-        # On laisse WhisperX détecter automatiquement la langue
+        options = {
+            "batch_size": BATCH_SIZE,
+            "task": "transcribe"
+        }
+        if language:
+            options["language"] = language # Use provided language or auto-detect if None
             
         result = whisper_model.transcribe(audio_data, **options)
+
         
         # Concaténer le texte
         full_text = " ".join([seg["text"].strip() for seg in result["segments"]])

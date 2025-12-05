@@ -41,14 +41,11 @@ async def read_index():
 async def chat_endpoint(
     audio: UploadFile = File(...),
     source_lang: str = Form(...),  # Langue maternelle: 'fr' ou 'ru'
-    target_lang: str = Form(...)   # Langue à apprendre: 'ru' ou 'fr'
+    target_lang: str = Form(...),   # Langue à apprendre: 'ru' ou 'fr'
+    level: str = Form("A1")        # Niveau de compétence
 ):
     """
     Endpoint principal pour l'apprentissage de langue.
-    
-    Logique:
-    - Étudiant FR apprenant RU: source_lang='fr', target_lang='ru'
-    - IA répond en FR (explications) + RU (exemples)
     """
     import time
     start_total = time.time()
@@ -57,20 +54,45 @@ async def chat_endpoint(
     temp_audio_path = f"temp_uploads/{session_id}_{audio.filename}"
     
     try:
-        # Sauvegarde audio
+        # Save audio code...
         start_save = time.time()
         with open(temp_audio_path, "wb") as buffer:
             shutil.copyfileobj(audio.file, buffer)
-        logger.info(f"💾 Sauvegarde: {time.time() - start_save:.2f}s")
+        file_size = os.path.getsize(temp_audio_path)
+        logger.info(f"💾 Sauvegarde: {time.time() - start_save:.2f}s | Taille: {file_size} bytes")
         
         # 1. STT - Transcription
         start_stt = time.time()
-        transcription = await stt_service.transcribe(temp_audio_path, language=target_lang)
+        # Ensure we don't force language=None if we want auto-detect, 
+        # but logic says None = auto-detect.
+        transcription = await stt_service.transcribe(temp_audio_path, language=None)
         stt_time = time.time() - start_stt
         logger.info(f"🎤 STT ({stt_time:.2f}s): {transcription}")
         
         if not transcription:
             return JSONResponse({"error": "Aucune parole détectée"}, status_code=400)
+            
+        # 1.5 Retry Logic (Fix Translation Hallucinations)
+        # If Whisper outputs English but user likely spoke Source/Target lang, force retry.
+        detected = llm_service._detect_language(transcription)
+        if detected == "en":
+            logger.info(f"⚠️ English detected ('{transcription}'). Retrying with forced source language '{source_lang}'...")
+            transcription_retry = await stt_service.transcribe(temp_audio_path, language=source_lang)
+            
+            # Check if retry yielded better result (not English)
+            detected_retry = llm_service._detect_language(transcription_retry)
+            if detected_retry != "en":
+                logger.info(f"✅ Retry successful! New text: '{transcription_retry}'")
+                transcription = transcription_retry
+            else:
+                logger.info(f"⚠️ Retry still English: '{transcription_retry}'. Trying forced target language '{target_lang}'...")
+                # Last resort: Try target language
+                transcription_final = await stt_service.transcribe(temp_audio_path, language=target_lang)
+                if llm_service._detect_language(transcription_final) != "en":
+                     logger.info(f"✅ Target retry successful! New text: '{transcription_final}'")
+                     transcription = transcription_final
+                else:
+                     logger.info("❌ All retries failed. Keeping original English.")
         
         # 2. LLM - Génération leçon bilingue avec historique
         start_llm = time.time()
@@ -91,7 +113,8 @@ async def chat_endpoint(
             source_lang, 
             target_lang,
             history=session_history,
-            expected_text=expected_text
+            expected_text=expected_text,
+            level=level
         )
         llm_time = time.time() - start_llm
         
@@ -158,7 +181,8 @@ async def chat_endpoint(
         response_data = {
             "user_text": transcription,
             "segments": segments,
-            "audio_segments": audio_segments
+            "audio_segments": audio_segments,
+            "user_analysis": result.get("user_analysis")
         }
         
         if pronunciation_data:
@@ -209,4 +233,4 @@ async def debug_history(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="localhost", port=8000)

@@ -31,6 +31,8 @@ class STTService:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 # Prepare the file for upload
                 with open(audio_path, 'rb') as audio_file:
+                    file_size = os.path.getsize(audio_path)
+                    print(f"📤 Sending audio to Whisper: {file_size} bytes")
                     files = {'audio': (os.path.basename(audio_path), audio_file, 'audio/webm')}
                     data = {'language': language} if language else {}
                     
@@ -183,16 +185,9 @@ class LLMService:
         """Calcule la similarité entre deux textes (0.0 à 1.0)"""
         return difflib.SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
 
-    async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history: list = None, expected_text: str = None) -> dict:
+    async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history: list = None, expected_text: str = None, level: str = "A1") -> dict:
         """
         Génère une réponse pédagogique bilingue FR/RU avec séparation stricte des langues.
-        
-        Args:
-            user_text: Texte de l'utilisateur
-            native_lang: Langue maternelle (non utilisé, détection auto)
-            learning_lang: Langue à apprendre (non utilisé, détection auto)
-            history: Historique de conversation [{"role": "user/assistant", "content": "..."}]
-            expected_text: Texte attendu pour l'exercice (validation stricte)
         """
         
         # Détecter si l'utilisateur parle français ou russe
@@ -212,114 +207,88 @@ class LLMService:
         teaching_lang_name = lang_names[teaching_lang]["name"]
         teaching_script = lang_names[teaching_lang]["script"]
         
-        # Validation stricte de l'exercice
-        validation_prompt = ""
-        if expected_text:
-            similarity = self.calculate_similarity(user_text, expected_text)
-            print(f"🔍 Validation stricte: '{user_text}' vs '{expected_text}' (Sim: {similarity:.2f})")
-            
-            if similarity < 0.5:
-                validation_prompt = f"""
-                ⚠️ ALERTE VALIDATION:
-                L'utilisateur devait dire: "{expected_text}"
-                Mais il a dit: "{user_text}"
-                
-                CE N'EST PAS L'EXERCICE DEMANDÉ.
-                1. NE LE FÉLICITE PAS pour sa prononciation.
-                2. Dis-lui gentiment qu'il n'a pas répété la phrase demandée.
-                3. S'il pose une question, réponds-y.
-                4. Redemande-lui de faire l'exercice "{expected_text}".
-                """
-            else:
-                validation_prompt = f"""
-                ✅ VALIDATION OK:
-                L'utilisateur essaie bien de dire "{expected_text}".
-                Tu peux évaluer sa prononciation et passer à la suite.
-                """
+    async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history=None, expected_text=None, level="A1") -> dict:
+        """
+        Génère une réponse structurée (analyse + segments audio) via LLM.
+        """
+        user_lang_name = "Français" if native_lang == "fr" else "Russe"
+        teaching_lang_name = "Russe" if learning_lang == "ru" else "Français"
         
+        # 0. Check Input Language (Guardrail)
+        detected_input_lang = self._detect_language(user_text)
+        if detected_input_lang == "en":
+            print(f"⛔ Input detected as English: {user_text}")
+            return {
+                "user_analysis": {
+                    "is_correct": False,
+                    "corrected_text": "",
+                    "explanation": f"I detected English ('{user_text}'). Please speak {user_lang_name} or {teaching_lang_name}."
+                },
+                "segments": [
+                    {"lang": native_lang, "text": f"J'ai entendu de l'anglais ({user_text}). Merci de parler {user_lang_name} ou {teaching_lang_name}."},
+                    {"lang": learning_lang, "text": "Пожалуйста, говорите по-русски." if learning_lang == "ru" else "S'il vous plaît, parlez français."}
+                ]
+            }
+        
+        # Mapping level to description
+        level_descriptions = {
+            "A1": "Débutant: Phrases très simples, vocabulaire de base.",
+            "A2": "Élémentaire: Phrases simples, vie quotidienne.",
+            "B1": "Intermédiaire: Discours plus cohérent, expression d'opinions.",
+            "B2": "Intermédiaire supérieur: Discours fluide et spontané.",
+            "C1": "Avancé: Langue souple et efficace.",
+            "C2": "Maîtrise: Précision et nuance."
+        }
+        level_desc = level_descriptions.get(level, level_descriptions["A1"])
+
+        teaching_script = "cyrillique" if learning_lang == "ru" else "latin"
+
+        context_prompt = ""
+        # Si on attendait une phrase spécifique (exercice de répétition)
+        if expected_text:
+            context_prompt = f"""
+CONTEXTE EXERCICE PRÉCÉDENT:
+L'utilisateur devait dire : "{expected_text}"
+Analyse ce que l'utilisateur a dit ("{user_text}") par rapport à cet objectif.
+Sois indulgent sur la phonétique exacte, mais strict sur le sens et la grammaire.
+"""
+
         system_prompt = f"""Tu es un professeur de {teaching_lang_name} pour des étudiants {user_lang_name}.
+NIVEAU ÉTUDIANT: {level} ({level_desc}). ADAPTE TES PHRASES À CE NIVEAU.
 
-{validation_prompt}
+OBJECTIFS:
+1. Analyser la réponse/demande de l'utilisateur.
+2. Détecter si l'utilisateur demande de l'aide ("trop dur", "répète", "traduis").
+   - SI AIDE DEMANDÉE: Explique en {user_lang_name} et simplifie/répète l'exercice.
+3. Corriger les erreurs (grammaire, syntaxe) si nécessaire.
+4. Proposer la suite de la conversation (nouvelle phrase à répéter/répondre) dans la langue cible ({teaching_lang_name}).
+   - IMPORTANT: Si NIVEAU >= B2, INTERDIT de faire des exercices de prénom/âge/salutations basiques.
+   - B2/C1/C2 = Sujets complexes (Débat, Opinion, Hypothèse, Culture). Parle comme à un natif.
 
-🚨 RÈGLE ABSOLUE - SÉPARATION DES LANGUES 🚨
+{context_prompt}
 
-INTERDICTIONS STRICTES:
-❌ JAMAIS mélanger {user_lang_name} et {teaching_lang_name} dans un même segment
+RÈGLES STRICTES DE LANGUE:
+- Segment "{user_lang_name}": UNIQUEMENT {user_lang_name}. Sert pour le feedback, l'explication, et la traduction de la phrase suivante.
+- Segment "{learning_lang}": UNIQUEMENT {teaching_lang_name}. C'est la phrase que l'utilisateur doit entendre et pratiquer.
+
+❌ JAMAIS d'anglais dans la réponse.
 ❌ JAMAIS utiliser des caractères {teaching_script} dans le segment {user_lang_name}
 ❌ JAMAIS utiliser des mots {teaching_lang_name} dans le segment {user_lang_name}
+❌ IMPORTANT: Le champ "text" du segment "{learning_lang}" DOIT contenir du {teaching_lang_name}.
+❌ IMPORTANT: Si l'utilisateur demande une traduction, fournis-la.
+❌ IMPORTANT: Ne JAMAIS laisser le segment "{learning_lang}" vide.
+
 
 FORMAT JSON OBLIGATOIRE:
 {{
+  "user_analysis": {{
+    "is_correct": true,
+    "corrected_text": "string (correction si nécessaire)",
+    "explanation": "string (explication si nécessaire)"
+  }},
   "segments": [
-    {{"lang": "{user_lang}", "text": "feedback/instruction avec TRADUCTION"}},
-    {{"lang": "{teaching_lang}", "text": "phrase complète à pratiquer"}}
-  ]
-}}
-
-RÈGLES DE TRADUCTION:
-- TOUJOURS donner l'équivalent dans les deux langues
-- Format: "Dis X en {teaching_lang_name}" puis donner X en {teaching_lang_name}
-- Exemple FR→RU: "Maintenant ton âge. Dis 'J'ai 25 ans'" → "Мне 25 лет"
-- Exemple RU→FR: "Теперь твой возраст. Скажи 'Мне 25 лет'" → "J'ai 25 ans"
-
-UTILISATION DE L'HISTORIQUE:
-- Consulter l'historique pour voir ce qui a déjà été enseigné
-- NE PAS répéter les mêmes exercices
-- Progresser logiquement: salutation → nom → âge → ville → profession
-- Si l'étudiant a déjà dit son nom, passer à l'âge
-- Si l'étudiant demande "encore", proposer le niveau suivant
-
-EXEMPLES CORRECTS ✅:
-
-Étudiant francophone apprenant le russe:
-
-User: "Bonjour, je veux apprendre"
-{{
-  "segments": [
-    {{"lang": "fr", "text": "Parfait ! Dis bonjour en russe"}},
-    {{"lang": "ru", "text": "Привет"}}
-  ]
-}}
-
-User: "Priviet"
-{{
-  "segments": [
-    {{"lang": "fr", "text": "Excellent ! Maintenant présente-toi. Dis 'Je m'appelle...'"}},
-    {{"lang": "ru", "text": "Меня зовут..."}}
-  ]
-}}
-
-User: "Menya zovut Greg"
-{{
-  "segments": [
-    {{"lang": "fr", "text": "Très bien Greg ! Maintenant ton âge. Dis 'J'ai ... ans'"}},
-    {{"lang": "ru", "text": "Мне ... лет"}}
-  ]
-}}
-
-Étudiant russophone apprenant le français:
-
-User: "Привет, я хочу учить французский"
-{{
-  "segments": [
-    {{"lang": "ru", "text": "Отлично! Скажи привет по-français"}},
-    {{"lang": "fr", "text": "Bonjour"}}
-  ]
-}}
-
-User: "Bonjour"
-{{
-  "segments": [
-    {{"lang": "ru", "text": "Прекрасно! Теперь представься. Скажи 'Меня зовут...'"}},
-    {{"lang": "fr", "text": "Je m'appelle..."}}
-  ]
-}}
-
-User: "Je m'appelle Ivan"
-{{
-  "segments": [
-    {{"lang": "ru", "text": "Отлично Иван! Теперь возраст. Скажи 'Мне ... лет'"}},
-    {{"lang": "fr", "text": "J'ai ... ans"}}
+    {{"lang": "{native_lang}", "text": "feedback/instruction avec TRADUCTION ({user_lang_name})"}},
+    {{"lang": "{learning_lang}", "text": "phrase complète à pratiquer ({teaching_lang_name} UNIQUEMENT)"}}
   ]
 }}
 
@@ -343,6 +312,7 @@ FEEDBACK CONSTRUCTIF:
 - Si demande "encore" → consulter historique et proposer le niveau suivant
 
 IMPORTANT:
+- Si l'utilisateur fait une erreur de grammaire, CORRIGE-LA dans `user_analysis`.
 - Phrases COURTES (3-7 mots maximum)
 - Vocabulaire SIMPLE niveau débutant
 - TOUJOURS donner la traduction dans le segment {user_lang_name}
@@ -363,13 +333,18 @@ Réponds UNIQUEMENT en JSON valide."""
         messages.append({"role": "user", "content": user_text})
         
         response = await self.chat(messages)
-        return self._parse_response(response, user_lang, teaching_lang, history)
+        return self._parse_response(response, native_lang, learning_lang, history)
     
     def _parse_response(self, content: str, native_lang: str, learning_lang: str, history: list = None) -> dict:
         """Parse et valide la réponse JSON du LLM"""
         try:
             # Nettoyer markdown
             content = content.replace("```json", "").replace("```", "").strip()
+            
+            # Common LLM typos repair
+            content = content.replace('{j"', '{"') # Fix typo seen in logs
+            content = content.replace('j"user', '"user')
+
             
             # Extraire JSON (premier objet uniquement)
             start = content.find('{')
@@ -398,9 +373,17 @@ Réponds UNIQUEMENT en JSON valide."""
             
             # Valider structure
             if "segments" not in result or not isinstance(result["segments"], list):
-                print(f"❌ Structure invalide: {result}")
+                print(f"❌ Structure invalide (manque segments): {result}")
                 return self._fallback_response("Erreur de structure", native_lang)
             
+            # Ensure user_analysis exists (backward compatibility or robustness)
+            if "user_analysis" not in result:
+                result["user_analysis"] = {
+                    "is_correct": True,
+                    "corrected_text": "",
+                    "explanation": ""
+                }
+
             # Valider langues des segments
             result["segments"] = self._validate_segments(result["segments"])
             
@@ -426,7 +409,12 @@ Réponds UNIQUEMENT en JSON valide."""
             "ru": "Произошла ошибка, повторите пожалуйста"
         }
         return {
-            "segments": [{"lang": lang, "text": error_messages.get(lang, error_messages["fr"])}]
+            "segments": [{"lang": lang, "text": error_messages.get(lang, error_messages["fr"])}],
+            "user_analysis": {
+                "is_correct": True,
+                "corrected_text": "",
+                "explanation": ""
+            }
         }
     
     def _validate_segments(self, segments: list) -> list:
@@ -468,13 +456,19 @@ Réponds UNIQUEMENT en JSON valide."""
         if any(p in text_lower for p in ["dit-on", "qu'", "c'est", "n'", "d'", "l'", "j'", "s'"]):
             return "fr"
         
-        # 3. Compter les caractères cyrilliques vs latins (seulement si pas de mots français clairs)
+        # 3. Compter les caractères cyrilliques vs latins
         cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
         latin_count = sum(1 for c in text if c.isalpha() and not ('\u0400' <= c <= '\u04FF'))
         
         # Si majorité cyrillique ET pas de mots français → russe
         if cyrillic_count > 0 and cyrillic_count > latin_count and french_word_count == 0:
             return "ru"
+            
+        # 4. Check for English (Basic)
+        english_words = ['the', 'is', 'hello', 'hi', 'how', 'are', 'you', 'give', 'me', 'exercise', 'learn']
+        english_count = sum(1 for word in english_words if f" {word} " in f" {text_lower} ")
+        if english_count >= 2 and french_word_count == 0:
+            return "en"
         
         # Par défaut français (alphabet latin)
         return "fr"
@@ -482,8 +476,7 @@ Réponds UNIQUEMENT en JSON valide."""
     def _validate_response_quality(self, segments: list, native_lang: str, learning_lang: str, history: list = None) -> bool:
         """
         Valide la qualité de la réponse :
-        1. Pureté des langues (pas de mélange abusif)
-        2. Présence de traductions (pédagogie)
+        1. Pureté des langues (pas de mélange abusk
         3. Pas de répétition abusive (si historique fourni)
         """
         
@@ -518,10 +511,25 @@ Réponds UNIQUEMENT en JSON valide."""
         # 2. Validation Pédagogique (Traductions)
         # On s'attend à avoir au moins un segment dans chaque langue
         langs_present = {seg.get("lang") for seg in segments}
-        if "fr" not in langs_present or "ru" not in langs_present:
-            print(f"❌ Manque une langue dans la réponse: {langs_present}")
-            return False
+        
+        # Auto-repair: If one language is missing, we try to fix it instead of hard failing
+        if "fr" not in langs_present:
+            print(f"⚠️ Manque le segment 'fr'. Ajout d'un placeholder.")
+            # Add a generic feedback segment
+            segments.insert(0, {"lang": "fr", "text": "Voici la phrase à pratiquer :"})
             
+        if "ru" not in langs_present:
+            print(f"⚠️ Manque le segment 'ru'. Tentative de récupération ou placeholder.")
+            # If we have history, maybe we can repeat the last exercise? 
+            # For now, just ask to say something simple to unblock.
+            segments.append({"lang": "ru", "text": "Да"}) # "Yes" - very simple placeholder to avoid crash
+            
+        # Re-check
+        langs_present = {seg.get("lang") for seg in segments}
+        if "fr" not in langs_present or "ru" not in langs_present:
+             print(f"❌ ECHEC AUTO-REPAIR. Langues: {langs_present}")
+             return False
+
         # 3. Validation Anti-Répétition (si historique)
         if history and len(history) >= 2:
             # Find the last assistant message in the history
@@ -536,6 +544,9 @@ Réponds UNIQUEMENT en JSON valide."""
             # If the response is identical to the previous assistant response
             if last_assistant_msg_content and last_assistant_msg_content == current_response:
                 print(f"❌ Répétition détectée: {current_response}")
+                # We allow it if it's a request to repeat, but usually LLM shouldn't loop.
+                # Let's not kill it, just warn? No, looping is bad UX.
+                # Construct a variation?
                 return False
 
         return True
@@ -609,19 +620,22 @@ class TTSService:
             lang = seg.get("lang", "fr")
             text = seg.get("text", "").strip()
             
-            if not text:
+            if not text or len(text) < 2 or text == "...":
                 continue
             
             filename = f"{session_id}_seg{idx}_{lang}.mp3"
             filepath = f"audio_cache/{filename}"
             
-            await self.generate_audio(text, lang, filepath)
-            
-            results.append({
-                "lang": lang,
-                "text": text,
-                "audio_url": f"/audio/{filename}"
-            })
+            try:
+                await self.generate_audio(text, lang, filepath)
+                
+                results.append({
+                    "lang": lang,
+                    "text": text,
+                    "audio_url": f"/audio/{filename}"
+                })
+            except Exception as e:
+                print(f"⚠️ TTS Error for '{text}': {e}")
+                continue
         
         return results
-
