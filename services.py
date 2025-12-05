@@ -217,18 +217,23 @@ class LLMService:
 NIVEAU ÉTUDIANT: {level}.
 
 TA MISSION:
-Salue l'utilisateur chaleureusement et pose une première question simple pour lancer la discussion.
+Salue l'utilisateur chaleureusement EN MENTIONNANT LE NIVEAU ({level}) et pose une première question simple pour lancer la discussion.
 L'objectif est de mettre l'utilisateur en confiance dès le début.
 
 RÈGLES:
 1. Adapte le niveau ({level}).
-2. Sois bref et amical.
+2. Mentionne le niveau ("Niveau A1", "Level B2", etc.) dans la salutation.
 3. Termine par une question.
+4. IMPORTANT: Dans le segment "{native_lang}", tu dois fournir la TRADUCTION EXACTE de ta salutation et de ta question. NE RÉPONDS PAS À LA QUESTION. TRADUIS-LA SEULEMENT.
+
+EXEMPLE (Si tu es prof de FR pour un Russe):
+Segment FR: "Bonjour ! Niveau A1. Comment t'appelles-tu ?"
+Segment RU: "Привет! Уровень А1. Как тебя зовут?" (ET NON "Меня зовут..." ou "Да")
 
 FORMAT JSON:
 {{
   "segments": [
-    {{"lang": "{native_lang}", "text": "Salutation + Traduction de la question ({user_lang_name})"}},
+    {{"lang": "{native_lang}", "text": "TRADUCTION LITÉRALE EN {user_lang_name} (Salutation + Question)"}},
     {{"lang": "{learning_lang}", "text": "Salutation + Question ({teaching_lang_name})"}}
   ]
 }}
@@ -236,12 +241,57 @@ FORMAT JSON:
         messages = [{"role": "system", "content": system_prompt}]
         messages.append({"role": "user", "content": "Commence la session."})
         
-        print(f"🎬 Generating greeting for level {level}...")
-        response = await self.chat(messages)
-        
-        return self._parse_response(response, native_lang, learning_lang, [])
+        # Retry loop for greeting robustness
+        max_retries = 3
+        for attempt in range(max_retries):
+            print(f"🎬 Generating greeting for level {level} (Attempt {attempt+1}/{max_retries})...")
+            response = await self.chat(messages)
+            
+            result = self._parse_response(response, native_lang, learning_lang, [])
+            
+            # Validation Robuste de la Traduction
+            segments = result.get("segments", [])
+            valid_translation = True
+            
+            if len(segments) == 2:
+                seg1 = segments[0] # Native (Translation)
+                seg2 = segments[1] # Learning (Target)
+                
+                # Check for empty or too short translation
+                if not seg1["text"] or len(seg1["text"]) < len(seg2["text"]) * 0.3:
+                    print(f"⚠️ Bad translation detected (too short/empty): '{seg1['text']}'")
+                    valid_translation = False
+                
+                # Check for "Da" placeholder
+                if native_lang == "ru" and len(seg1["text"]) < 10 and ("Да" in seg1["text"] or "Yes" in seg1["text"]):
+                    print(f"⚠️ Placeholder detected: '{seg1['text']}'")
+                    valid_translation = False
+            else:
+                 valid_translation = False
+
+            if valid_translation:
+                return result
+            
+            print("🔄 Retrying greeting generation...")
+            
+        # Fallback if all retries fail
+        print("❌ Greeting generation failed after retries. Using fallback.")
+        return result # Return whatever we have, better than crash
 
     async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history=None, expected_text=None, level="A1") -> dict:
+        """
+        Génère une réponse structurée (analyse + segments audio) via LLM.
+        """
+        user_lang_name = "Français" if native_lang == "fr" else "Russe"
+        teaching_lang_name = "Russe" if learning_lang == "ru" else "Français"
+        
+        # ... (Guardrail skipped for strict replacement) ...
+
+        # [Retain existing guardrail code logic manually if needed, or assume replace_file_content target is safe]
+        # Actually I need to be careful with replace_file_content context. 
+        # I will target `generate_greeting` specifically above and `system_prompt` below separately to be safe.
+        pass # Split into two calls.
+
         """
         Génère une réponse structurée (analyse + segments audio) via LLM.
         """
@@ -325,6 +375,7 @@ RÈGLES STRICTES DE LANGUE:
 ❌ IMPORTANT: Le champ "text" du segment "{learning_lang}" DOIT contenir du {teaching_lang_name}.
 ❌ IMPORTANT: Si l'utilisateur demande une traduction, fournis-la.
 ❌ IMPORTANT: Ne JAMAIS laisser le segment "{learning_lang}" vide.
+❌ NE RÉPÈTE PAS LA PHRASE DE L'UTILISATEUR telle quelle dans ta réponse. Réponds-lui naturellement. La correction va dans "user_analysis".
 
 FORMAT JSON OBLIGATOIRE:
 {{
@@ -346,6 +397,11 @@ FEEDBACK CONSTRUCTIF:
 - Si perdu → retour aux bases (salutation)
 - Si demande "encore" → consulter historique et proposer le niveau suivant
 
+IMPORTANT POUR LA CONTINUITÉ:
+- Si l'utilisateur demande "Quelle est la suite ?" ou "What next ?", NE REPART PAS À ZÉRO.
+- Regarde l'historique et propose un NOUVEAU sujet pertinent (ex: après le sport -> la musique, les voyages).
+- Ne dis JAMAIS "Bonjour" au milieu d'une conversation.
+
 IMPORTANT:
 - Si l'utilisateur fait une erreur de grammaire, CORRIGE-LA dans `user_analysis`.
 - Phrases COURTES (3-7 mots maximum)
@@ -362,6 +418,7 @@ Réponds UNIQUEMENT en JSON valide."""
         
         # Ajouter l'historique si disponible (limité aux 10 derniers échanges)
         if history:
+            print(f"📜 History loaded ({len(history)} items). Last: {history[-1]['content'][:50]}...")
             messages.extend(history[-10:])
         
         # Ajouter le message actuel
@@ -649,8 +706,8 @@ class TTSService:
         communicate = edge_tts.Communicate(clean_text, voice)
         await communicate.save(output_path)
     
-    async def generate_segments(self, segments: list, session_id: str) -> list:
-        """Génère les fichiers audio pour tous les segments"""
+    async def generate_segments(self, segments: list, session_id: str, skip_lang: str = None) -> list:
+        """Génère les fichiers audio pour tous les segments (sauf skip_lang)"""
         results = []
         
         for idx, seg in enumerate(segments):
@@ -658,6 +715,10 @@ class TTSService:
             text = seg.get("text", "").strip()
             
             if not text or len(text) < 2 or text == "...":
+                continue
+
+            # SKIP NATIVE LANGUAGE AUDIO (Optimization & UI request)
+            if skip_lang and lang == skip_lang:
                 continue
             
             filename = f"{session_id}_seg{idx}_{lang}.mp3"

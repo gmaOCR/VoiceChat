@@ -38,15 +38,43 @@ async function startSession() {
         
         const data = await response.json();
         
-        // Display AI message from segments
+        // Display AI message from segments with Smart UI
         if (data.response && data.response.segments) {
-            let combinedMessage = '';
-            data.response.segments.forEach((segment, index) => {
+            const responseContainer = document.createElement('div');
+            responseContainer.classList.add('message', 'ai');
+            
+            data.response.segments.forEach((segment) => {
                 const langFlag = segment.lang === 'fr' ? '🇫🇷' : (segment.lang === 'ru' ? '🇷🇺' : '');
-                if (index > 0) combinedMessage += '\n'; // Use newline for better readability
-                combinedMessage += `${langFlag} ${segment.text}`;
+                const isNative = segment.lang === sourceLang;
+                
+                const segDiv = document.createElement('div');
+                segDiv.classList.add('segment-block');
+                
+                if (isNative) {
+                    const toggleBtn = document.createElement('button');
+                    toggleBtn.classList.add('tip-toggle');
+                    toggleBtn.innerHTML = `💡 Traduction (${langFlag})`;
+                    toggleBtn.onclick = () => {
+                        contentDiv.classList.toggle('visible');
+                    };
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.classList.add('hidden-content');
+                    contentDiv.textContent = segment.text;
+                    
+                    segDiv.appendChild(toggleBtn);
+                    segDiv.appendChild(contentDiv);
+                } else {
+                    segDiv.textContent = `${langFlag} ${segment.text}`;
+                    segDiv.classList.add('target-lang-text');
+                }
+                
+                responseContainer.appendChild(segDiv);
             });
-            addMessage(combinedMessage, "ai");
+            
+            chatHistory.appendChild(responseContainer);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+
         } else {
             addMessage("👋 (Welcome)", "ai"); 
         } 
@@ -165,15 +193,46 @@ async function sendAudio() {
             displayCorrection(data.user_analysis);
         }
 
-        // Display AI Segments with language indicators
+        // Display AI Segments with Smart UI
         if (data.segments && data.segments.length > 0) {
-            let combinedMessage = '';
-            data.segments.forEach((segment, index) => {
-                const langFlag = segment.lang === 'fr' ? '🇫🇷' : '🇷🇺';
-                if (index > 0) combinedMessage += ' ';
-                combinedMessage += `${langFlag} ${segment.text}`;
+            
+            // Create container for AI response
+            const responseContainer = document.createElement('div');
+            responseContainer.classList.add('message', 'ai');
+            
+            data.segments.forEach((segment) => {
+                const langFlag = segment.lang === 'fr' ? '🇫🇷' : (segment.lang === 'ru' ? '🇷🇺' : '');
+                const isNative = segment.lang === sourceLang;
+                
+                const segDiv = document.createElement('div');
+                segDiv.classList.add('segment-block');
+                
+                if (isNative) {
+                    // Tip UI for Native Language
+                    const toggleBtn = document.createElement('button');
+                    toggleBtn.classList.add('tip-toggle');
+                    toggleBtn.innerHTML = `💡 Traduction (${langFlag})`;
+                    toggleBtn.onclick = () => {
+                        contentDiv.classList.toggle('visible');
+                    };
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.classList.add('hidden-content');
+                    contentDiv.textContent = segment.text;
+                    
+                    segDiv.appendChild(toggleBtn);
+                    segDiv.appendChild(contentDiv);
+                } else {
+                    // Normal Text for Target Language
+                    segDiv.textContent = `${langFlag} ${segment.text}`;
+                    segDiv.classList.add('target-lang-text');
+                }
+                
+                responseContainer.appendChild(segDiv);
             });
-            addMessage(combinedMessage, "ai", false, false);
+            
+            chatHistory.appendChild(responseContainer);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
         // Play Audio Segments Sequentially

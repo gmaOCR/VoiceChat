@@ -173,7 +173,11 @@ async def chat_endpoint(
         
         # 3. TTS - Synthèse audio
         start_tts = time.time()
-        audio_segments = await tts_service.generate_segments(segments, session_id)
+        # On ne génère PAS l'audio pour la langue maternelle (source_lang / native_lang)
+        # source_lang is passed as form data, verify variable name availability
+        
+        # In chat_endpoint signatures: source_lang is available.
+        audio_segments = await tts_service.generate_segments(segments, session_id, skip_lang=source_lang)
         tts_time = time.time() - start_tts
         logger.info(f"🔊 TTS ({tts_time:.2f}s): {len(audio_segments)} fichiers")
         
@@ -254,7 +258,8 @@ async def start_endpoint(
 
     # TTS
     try:
-        audio_segments = await tts_service.generate_segments(segments, session_id)
+        # Skip source_lang audio
+        audio_segments = await tts_service.generate_segments(segments, session_id, skip_lang=source_lang)
     except Exception as e:
         logger.error(f"TTS Error: {e}")
         return JSONResponse({"error": "TTS Error"}, status_code=500)
