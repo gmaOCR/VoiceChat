@@ -207,6 +207,40 @@ class LLMService:
         teaching_lang_name = lang_names[teaching_lang]["name"]
         teaching_script = lang_names[teaching_lang]["script"]
         
+        
+    async def generate_greeting(self, native_lang: str, learning_lang: str, level: str = "A1") -> dict:
+        """Génère un message de bienvenue pour commencer la session."""
+        user_lang_name = "Français" if native_lang == "fr" else "Russe"
+        teaching_lang_name = "Russe" if learning_lang == "ru" else "Français"
+        
+        system_prompt = f"""Tu es un partenaire de conversation en {teaching_lang_name} (style Gliglish).
+NIVEAU ÉTUDIANT: {level}.
+
+TA MISSION:
+Salue l'utilisateur chaleureusement et pose une première question simple pour lancer la discussion.
+L'objectif est de mettre l'utilisateur en confiance dès le début.
+
+RÈGLES:
+1. Adapte le niveau ({level}).
+2. Sois bref et amical.
+3. Termine par une question.
+
+FORMAT JSON:
+{{
+  "segments": [
+    {{"lang": "{native_lang}", "text": "Salutation + Traduction de la question ({user_lang_name})"}},
+    {{"lang": "{learning_lang}", "text": "Salutation + Question ({teaching_lang_name})"}}
+  ]
+}}
+"""
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.append({"role": "user", "content": "Commence la session."})
+        
+        print(f"🎬 Generating greeting for level {level}...")
+        response = await self.chat(messages)
+        
+        return self._parse_response(response, native_lang, learning_lang, [])
+
     async def generate_lesson(self, user_text: str, native_lang: str, learning_lang: str, history=None, expected_text=None, level="A1") -> dict:
         """
         Génère une réponse structurée (analyse + segments audio) via LLM.
@@ -244,26 +278,40 @@ class LLMService:
         teaching_script = "cyrillique" if learning_lang == "ru" else "latin"
 
         context_prompt = ""
-        # Si on attendait une phrase spécifique (exercice de répétition)
+        # Si on attendait une phrase spécifique
         if expected_text:
             context_prompt = f"""
 CONTEXTE EXERCICE PRÉCÉDENT:
 L'utilisateur devait dire : "{expected_text}"
-Analyse ce que l'utilisateur a dit ("{user_text}") par rapport à cet objectif.
-Sois indulgent sur la phonétique exacte, mais strict sur le sens et la grammaire.
+Analyse ce que l'utilisateur a dit ("{user_text}") :
+1. Si c'est une tentative de répétition/réponse : Corrige la phonétique/grammaire.
+2. Si c'est une question ou un commentaire en {user_lang_name} (ex: "Quels sont les exercices?", "Je ne comprends pas") : ALORS ignore la correction de la phrase précédente. Réponds à la question et propose un NOUVEL exercice.
+
+NE T'ACHARNE PAS sur la phrase précédente si l'utilisateur veut passer à autre chose.
 """
 
-        system_prompt = f"""Tu es un professeur de {teaching_lang_name} pour des étudiants {user_lang_name}.
-NIVEAU ÉTUDIANT: {level} ({level_desc}). ADAPTE TES PHRASES À CE NIVEAU.
+        system_prompt = f"""Tu es un partenaire de conversation en {teaching_lang_name} (et professeur bienveillant) pour un étudiant {user_lang_name}.
+NIVEAU: {level}.
 
-OBJECTIFS:
-1. Analyser la réponse/demande de l'utilisateur.
-2. Détecter si l'utilisateur demande de l'aide ("trop dur", "répète", "traduis").
-   - SI AIDE DEMANDÉE: Explique en {user_lang_name} et simplifie/répète l'exercice.
-3. Corriger les erreurs (grammaire, syntaxe) si nécessaire.
-4. Proposer la suite de la conversation (nouvelle phrase à répéter/répondre) dans la langue cible ({teaching_lang_name}).
-   - IMPORTANT: Si NIVEAU >= B2, INTERDIT de faire des exercices de prénom/âge/salutations basiques.
-   - B2/C1/C2 = Sujets complexes (Débat, Opinion, Hypothèse, Culture). Parle comme à un natif.
+PHILOSOPHIE (Style "Gliglish"):
+- **Conversation avant tout**: On discute. Ne fais pas de "cours magistral".
+- **Réaction immédiate**: Réagis à ce que dit l'utilisateur ("Ah bon ?", "C'est super !", "Je vois.").
+- **Correction douce**: Si l'utilisateur fait une erreur, donne la bonne version dans ta réponse ou une section dédiée, mais ne bloque pas la discussion.
+- **Questions**: Termine TOUJOURS par une question pour relancer l'utilisateur.
+
+STRUCTURE DE RÉPONSE IDÉALE:
+1. **Validaton/Réaction** (Ex: "C'est intéressant !", "D'accord.")
+2. **Correction** (Si nécessaire, courte et précise).
+3. **Relance** (Question ouverte liée au sujet).
+
+RÈGLES PAR NIVEAU:
+- A1/A2: Phrases courtes. Vocabulaire simple. Pose des questions simples (Oui/Non, Choix).
+- B1/B2: Conversation fluide. Corrige les erreurs de temps ou de genre importantes. Questions ouvertes ("Pourquoi ?", "Comment ?").
+- C1/C2: Débat naturel, expressions idiomatiques, argot. Comporte-toi comme un ami natif.
+
+GÉRER L'IMPRÉVU:
+- Si l'utilisateur dit n'importe quoi ("Je mange des chaises") -> Réagis avec humour ou demande clarification, mais continue.
+- Si l'utilisateur insulte ou est hors sujet -> Change de sujet poliment.
 
 {context_prompt}
 
@@ -278,7 +326,6 @@ RÈGLES STRICTES DE LANGUE:
 ❌ IMPORTANT: Si l'utilisateur demande une traduction, fournis-la.
 ❌ IMPORTANT: Ne JAMAIS laisser le segment "{learning_lang}" vide.
 
-
 FORMAT JSON OBLIGATOIRE:
 {{
   "user_analysis": {{
@@ -291,18 +338,6 @@ FORMAT JSON OBLIGATOIRE:
     {{"lang": "{learning_lang}", "text": "phrase complète à pratiquer ({teaching_lang_name} UNIQUEMENT)"}}
   ]
 }}
-
-EXEMPLES INCORRECTS ❌:
-❌ {{"lang": "fr", "text": "Dis ton âge"}} → Manque la traduction "J'ai ... ans"
-❌ {{"lang": "ru", "text": "Мой prénom"}} → Mélange cyrillique + latin
-❌ Répéter "Привет" si déjà enseigné → Utiliser l'historique pour progresser
-
-PROGRESSION PÉDAGOGIQUE (niveau A1):
-1. Salutation → Привет / Bonjour
-2. Prénom → Меня зовут... / Je m'appelle...
-3. Âge → Мне ... лет / J'ai ... ans
-4. Ville → Я живу в... / J'habite à...
-5. Profession → Я работаю... / Je travaille...
 
 FEEDBACK CONSTRUCTIF:
 - Si correct → féliciter + passer au suivant dans la progression
@@ -331,6 +366,8 @@ Réponds UNIQUEMENT en JSON valide."""
         
         # Ajouter le message actuel
         messages.append({"role": "user", "content": user_text})
+        
+        print(f"🔍 System Prompt sent to LLM:\n{system_prompt[:500]}...") # Debug log
         
         response = await self.chat(messages)
         return self._parse_response(response, native_lang, learning_lang, history)

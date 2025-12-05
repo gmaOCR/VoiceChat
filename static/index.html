@@ -34,15 +34,21 @@
             </div>
             <div class="level-selector">
                 <label for="level-select">Niveau:</label>
-                <select id="level-select" name="level">
-                    <option value="A1" selected>A1 - Débutant</option>
-                    <option value="A2">A2 - Élémentaire</option>
-                    <option value="B1">B1 - Intermédiaire</option>
-                    <option value="B2">B2 - Intermédiaire Supérieur</option>
-                    <option value="C1">C1 - Avancé</option>
-                    <option value="C2">C2 - Maîtrise</option>
-                </select>
+                <div class="controls">
+                    <select id="level-select">
+                        <option value="A1">A1 (Débutant)</option>
+                        <option value="A2">A2 (Élémentaire)</option>
+                        <option value="B1">B1 (Intermédiaire)</option>
+                        <option value="B2">B2 (Intermédiaire +)</option>
+                        <option value="C1">C1 (Avancé)</option>
+                        <option value="C2">C2 (Maîtrise)</option>
+                    </select>
+
+                    <button id="startBtn" class="primary-btn">▶️ Start Conversation</button>
+                </div>
             </div>
+            <div class="mic-container">
+
         </header>
 
         <main id="chat-history">

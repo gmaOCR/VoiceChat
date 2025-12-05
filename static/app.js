@@ -3,11 +3,75 @@ const statusText = document.getElementById('status-text');
 const chatHistory = document.getElementById('chat-history');
 let mediaRecorder;
 let audioChunks = [];
+let currentSessionId; 
 
 recordBtn.addEventListener('mousedown', startRecording);
 recordBtn.addEventListener('mouseup', stopRecording);
 recordBtn.addEventListener('touchstart', startRecording); // Mobile support
 recordBtn.addEventListener('touchend', stopRecording);
+
+const startBtn = document.getElementById('startBtn');
+if (startBtn) {
+    startBtn.addEventListener('click', startSession);
+}
+
+async function startSession() {
+    statusText.textContent = "Starting session...";
+    
+    const selectedLang = document.querySelector('input[name="lang"]:checked').value;
+    const sourceLang = selectedLang; 
+    const targetLang = selectedLang === 'fr' ? 'ru' : 'fr';
+    const level = document.getElementById('level-select').value;
+    
+    const formData = new FormData();
+    formData.append("source_lang", sourceLang);
+    formData.append("target_lang", targetLang);
+    formData.append("level", level);
+    
+    try {
+        const response = await fetch('/start', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) throw new Error("Start failed");
+        
+        const data = await response.json();
+        
+        // Display AI message from segments
+        if (data.response && data.response.segments) {
+            let combinedMessage = '';
+            data.response.segments.forEach((segment, index) => {
+                const langFlag = segment.lang === 'fr' ? '🇫🇷' : (segment.lang === 'ru' ? '🇷🇺' : '');
+                if (index > 0) combinedMessage += '\n'; // Use newline for better readability
+                combinedMessage += `${langFlag} ${segment.text}`;
+            });
+            addMessage(combinedMessage, "ai");
+        } else {
+            addMessage("👋 (Welcome)", "ai"); 
+        } 
+        
+        // Save session
+        currentSessionId = data.session_id;
+        
+        // Disable controls
+        document.getElementById('level-select').disabled = true;
+        document.querySelectorAll('input[name="lang"]').forEach(el => el.disabled = true);
+        startBtn.disabled = true;
+        startBtn.classList.add('disabled');
+        
+        // Play audio
+        if (data.audio_segments) {
+            await playAudioSequentially(data.audio_segments);
+        }
+        
+        statusText.textContent = "Your turn (Press Mic)";
+        
+    } catch (error) {
+        console.error("Error starting:", error);
+        statusText.textContent = "Error starting.";
+    }
+}
 
 async function startRecording(e) {
     e.preventDefault(); // Prevent focus issues

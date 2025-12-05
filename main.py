@@ -50,6 +50,8 @@ async def chat_endpoint(
     import time
     start_total = time.time()
     
+    logger.info(f"📝 Request Params - Level: {level}, Source: {source_lang}, Target: {target_lang}")
+    
     session_id = str(uuid.uuid4())
     temp_audio_path = f"temp_uploads/{session_id}_{audio.filename}"
     
@@ -213,6 +215,58 @@ async def chat_endpoint(
         # Nettoyage fichier temporaire
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
+
+@app.post("/start")
+async def start_endpoint(
+    source_lang: str = Form(...),
+    target_lang: str = Form(...),
+    level: str = Form("A1")
+):
+    """Démarre la session avec un message de bienvenue de l'IA."""
+    session_id = str(uuid.uuid4())
+    logger.info(f"🚀 Starting session {session_id} - Level: {level}")
+    
+    # Store context
+    session_context[session_id] = {
+        "lang": target_lang,
+        "level": level,
+        "last_exercise": None,
+        "native_lang": source_lang
+    }
+    
+    # Generate greeting
+    retry_count = 0
+    segments = []
+    while retry_count < 2:
+        try:
+            result = await llm_service.generate_greeting(source_lang, target_lang, level)
+            segments = result.get("segments", [])
+            break
+        except Exception as e:
+            logger.error(f"Greeting generation failed: {e}")
+            retry_count += 1
+            if retry_count == 2:
+                # Fallback hardcoded
+                segments = [
+                    {"lang": source_lang, "text": "Bienvenue ! Commençons."},
+                    {"lang": target_lang, "text": "Привет! Давай начнем." if target_lang == "ru" else "Bonjour !"}
+                ]
+
+    # TTS
+    try:
+        audio_segments = await tts_service.generate_segments(segments, session_id)
+    except Exception as e:
+        logger.error(f"TTS Error: {e}")
+        return JSONResponse({"error": "TTS Error"}, status_code=500)
+        
+    return {
+        "session_id": session_id,
+        "response": {
+            "segments": segments,
+            "user_analysis": {"is_correct": True, "explanation": "Session started."} 
+        },
+        "audio_segments": audio_segments
+    }
 
 @app.get("/evaluate_quality")
 async def evaluate_quality(request: Request):
